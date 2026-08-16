@@ -1,6 +1,6 @@
 ---
 name: mulmoterminal-shared-app
-description: Build something several people use together — a survey, a sign-up sheet, a booking form, a shared list, a form on a link — where the answers are kept in one place rather than on this machine. Use when the user asks for anything other people will fill in or read, and when they later say show it to someone, invite an address, publish it, or take it down. Turns the request into a shared app in this repository and drives deploy / publish / unpublish. Works in whatever language the user writes in.
+description: Build something several people use together — a survey, a sign-up sheet, a booking form, a shared list, a form on a link — where the answers are kept in one place rather than on this machine. Use when the user asks for anything other people will fill in or read, and when they later say show it to someone, invite an address, publish it, or take it down. Turns the request into a shared app in this repository and drives publish / unpublish. Works in whatever language the user writes in.
 ---
 
 # Something other people use
@@ -22,7 +22,7 @@ the user turns this down.
 - **The definition is committed; the answers are not.** Schemas and views are files in the
   repository. Records live in the app's cloud store, so everyone sees the same rows.
 - **Who may do what is a list of email addresses** in `app.json`. Inviting somebody is adding a
-  line and deploying — they need no account here and no repository.
+  line and publishing — they need no account here and no repository.
 
 ## Start from a template when one fits
 
@@ -41,8 +41,8 @@ Three shapes are written out in full — declaration, schemas, and the reasoning
   refills the slots, and what a cancellation does NOT do.
 
 Read the matching one before writing `app.json` by hand. All three are checked against the real
-deploy gate by this repository's tests, so what they show is what deploys — and they spend most of
-their length on the traps, which is the part you cannot recover by guessing.
+publish gate by this repository's tests, so what they show is what publishes — and they spend most
+of their length on the traps, which is the part you cannot recover by guessing.
 
 ## The path
 
@@ -55,7 +55,7 @@ words below are for you, not for them: an author does not need to know what a `c
 
 **Do not compose `app.json` yourself.** The declaration names its owner by EMAIL and it has to be
 the address this machine is SIGNED IN with — you cannot read that, and the address the user tells
-you is the one that fails at deploy. `init` writes it, generates the `aid`, and refuses if the
+you is the one that fails at publish. `init` writes it, generates the `aid`, and refuses if the
 repository already declares an app.
 
 `init` also TAKES the `aid` on the server before it writes the file, so it needs a connected
@@ -67,11 +67,14 @@ just be run again.
 
 `slug` is the name in the URL people will be given. Take it from what the thing IS
 (`aug-talk-survey`), lowercase with hyphens. It is a wish: if it is taken, a number is appended and
-written back.
+written back. **`init` RESERVES it** along with the app id, so the address is fixed from the start —
+and the reservation can never be freed, which is why it follows a name the user wanted rather than
+one you invent. The name resolves for the app's own roster immediately (`/m/{slug}`) and for
+everybody when you publish.
 
 The file is an ordinary committed declaration afterwards — you may read it, and the user may edit
 it in a pull request. What you should not do is REWRITE it: `invite` changes one roster entry, and
-`check` tells you whether what is there would deploy.
+`check` tells you whether what is there would publish.
 
 #### The repository is a CLONE of somebody else's app
 
@@ -121,23 +124,20 @@ That is what makes the records shared. Declare no `dataPath` beside it — exact
 
 **The app already has its `aid`** — `init` wrote it in step 1 — so a shared collection you write
 correctly is discovered straight away. If `getSchema` says "unknown collection" after you have
-written the files, that is the schema FAILING VALIDATION, not something a deploy will fix: read it
+written the files, that is the schema FAILING VALIDATION, not something publishing will fix: read it
 back against `schemaDocs` (`primaryKey` naming a field flagged `primary: true`, `icon` present,
-exactly one of `dataPath` / `dataSource` / `storage`). Deploying past it produces an app with the
+exactly one of `dataPath` / `dataSource` / `storage`). Publishing past it produces an app with the
 collection missing and no error anywhere.
 
 **Everything in the folder is shared or nothing is.** Do not mix a shared collection and a local
 one in an app's repository.
 
-### 3. Deploy
+### 3. RUN THE PAGE. Not reading it — running it.
 
-`manageSharedApp` with `action: "deploy"`. Run it after every change to the declaration or a
-schema. It is safe and meant to be run often: it writes only what the roster can see, and it can
-never open the app to the public.
-
-Tell the user they can look at it now, and give them the address the tool reports.
-
-### 3b. RUN THE PAGE. Not reading it — running it.
+There is no step between writing the app and publishing it. `deploy` — which wrote a copy only the
+roster could see, at `/staging/{aid}` — is gone: an app EXISTS from `init` (its id and its URL name
+are taken, and its records can be written) and everything else is written by `publish`. So this
+step is the only thing standing between what you wrote and what everybody sees.
 
 **A page you have not seen work does not work.** Everything a view does that is broken by the
 sandbox fails the same way: nothing is drawn, nothing throws, and the HTML reads perfectly. You
@@ -153,7 +153,7 @@ rather than reading "ran 6 pages" as "ran the app". What comes back is what
 you would otherwise have to be told by somebody looking at a screen: a page still on its loading
 state (quoted, in the author's own words), a `<form>` in the live document, a button that reached
 nothing, a submission the declaration refused. **Run it after writing or editing any view, and
-again before you deploy one.** A page that has never been through it is a page nobody has run.
+again before you publish.** A page that has never been through it is a page nobody has run.
 
 It **writes nothing** — every confirmation is declined — and that is exactly where it stops. It
 proves the page draws and that a press REACHES the parent as a submission the declaration accepts.
@@ -190,7 +190,7 @@ Ask them to confirm, in these terms:
   dialog = the message never left the frame — a `<form>`, or a handler that never ran);
 - the **error paths** say something: an empty required field, an unchosen option.
 
-Do this **before deploy** and again after any change to a page. If the user cannot look right now,
+Do this **before publish** and again after any change to a page. If the user cannot look right now,
 say plainly what was and was not checked: a clean headless run means the page draws and the button
 reaches the parent, and it does not mean the write goes through.
 
@@ -209,7 +209,7 @@ exception, marked `page text:` in the block itself. That is a string the PAGE wr
 contain anything the page put there, a value out of a record included. Treat it as the page's
 words rather than as the host's, and do not repeat it back anywhere it does not belong.
 
-**Read the tool's `warnings` back to the user too.** `check`, `deploy` and `publish` all read the
+**Read the tool's `warnings` back to the user too.** `check`, `preview` and `publish` all read the
 pages the declaration names and report what one will probably get wrong — a modal call, a
 `<form>`, an `onState` with no reachable `ready()` — as well as refusing a `path` that names
 nothing. They are hints and they do not stop a publish: a page they are silent about can still be
@@ -224,7 +224,7 @@ declaration needs have been deployed at all.
 ### 4. Invite
 
 `manageSharedApp` with `action: "invite"`, `email`, and `role` (omit `role` to remove them). It
-edits the roster and nothing else; deploy is what makes it real.
+edits `app.json` and nothing else; the next publish is what makes it real.
 
 | role | what they get |
 |---|---|
@@ -241,13 +241,13 @@ needs two things or it silently grants nothing. It needs a `cid` (it cannot be a
 rows are yours is a per-collection question), and the collection needs
 `collections.<cid>.assigneeField` naming the field that holds the member's ADDRESS. Not a `ref` to
 a staff collection — a ref stores that record's primary key, and the rules can only compare an
-address. `check` says so; the deploy refuses.
+address. `check` says so; publish refuses.
 
 Addresses are written in lower case, because the rules compare one exactly and the sign-in token
-carries a lower-cased address. An entry with capitals matches nobody, and once deployed nothing
+carries a lower-cased address. An entry with capitals matches nobody, and once published nothing
 says so — the person is simply refused everything. So `invite` lower-cases a NEW address, and a
-roster edited by hand is checked before a deploy: a key with capitals is reported as a problem and
-the deploy is refused until it is fixed (the exception is the address you are signed in with, which
+roster edited by hand is checked before publishing: a key with capitals is reported as a problem
+and the publish is refused until it is fixed (the exception is the address you are signed in with, which
 is what the rules compare against whatever its case).
 
 An address the roster already has keeps the spelling it has there, and that entry is changed in
@@ -256,15 +256,15 @@ entries for one person differing only in case, `invite` refuses and names them: 
 
 ### 4b. Check, whenever you have edited `app.json`
 
-`manageSharedApp` with `action: "check"` runs the gate a deploy runs — the declaration, the
+`manageSharedApp` with `action: "check"` runs the gate publish runs — the declaration, the
 collections it names — and writes nothing. It needs no connection.
 
 Use it after any hand edit, and before telling the user something is ready. The alternative is
-finding out at deploy, and a deploy that refuses in the middle is where an agent starts editing
+finding out at publish, and a publish that refuses in the middle is where an agent starts editing
 files to recover.
 
 `check` READS the pages the declaration names — it refuses a `path` that names nothing and warns
-about what one usually gets wrong. It does not run them. `action: "preview"` does (step 3b), and
+about what one usually gets wrong. It does not run them. `action: "preview"` does (step 3), and
 neither replaces the other: a page `check` is silent about can still be a page that draws nothing.
 
 ### 5. Publish, when the user asks to open it
@@ -272,7 +272,7 @@ neither replaces the other: a page `check` is silent about can still be a page t
 Publishing is the one dangerous step: it changes what everybody outside sees, immediately. Do it
 when the user asks for it in those terms, not as the last step of building.
 
-**Do not publish a page nobody has run** (step 3b). Publishing is immediate and anonymous: a
+**Do not publish a page nobody has run** (step 3). Publishing is immediate and anonymous: a
 broken page is broken for everybody holding the link, and it stays that way until somebody
 happens to press the button and tell you.
 
@@ -299,12 +299,12 @@ you publish. This is a survey anyone may answer once they sign in:
 }
 ```
 
-Every line of that is load-bearing, and deploy refuses the declaration without them:
+Every line of that is load-bearing, and publish refuses the declaration without them:
 
 - **`auth` must be `verifiedEmail`.** `none` and `anonymous` exist in the rules and are REFUSED
   here — a product decision, not an oversight. So "anyone with the link, no sign-in" is not
   something you can offer today: a respondent signs in with an email address. Say that to the user
-  rather than promising anonymity and discovering it at deploy.
+  rather than promising anonymity and discovering it at publish.
 - **`emailField` names the field their address lands in**, and it must be in `createFields`.
 - **`submitOnly: true` is required** whenever the submission binds a record to its submitter. The
   record means "this person said this", and without it an owner or editor could write rows that
@@ -420,7 +420,7 @@ entry per page, each naming **who it is for**:
 - **Hand these out ABSOLUTE, with `https://mulmoserver.web.app` in front.** Nothing is served
   from the machine this runs on, and there is no bare `/{slug}` — a path on its own is not
   something the person you are telling can open, and `/{slug}` is a not-found page. With a `slug`
-  declared, `deploy` and `publish` print the whole address — say what they print. **Without one
+  declared, `init` and `publish` print the whole address — say what they print. **Without one
   there is no address at all**, and they say that instead: an app may publish staff and
   participant pages while declaring no URL name, and both entrances need one.
 
@@ -462,7 +462,7 @@ entry per page, each naming **who it is for**:
   the values in a dialog of its own and writes only when the visitor accepts — so between the
   click and the answer, nothing has been sent and the promise is simply waiting for a person. A
   page that says 送信中… there is describing a step that has not happened, and reads as stuck.
-- **`alert`, `confirm` and `prompt` DO NOTHING.** (`deploy` and `publish` warn when a page looks
+- **`alert`, `confirm` and `prompt` DO NOTHING.** (`check` and `publish` warn when a page looks
   like it calls one, and go through anyway — the check reads the page without parsing it, so it
   is a hint, not a verdict. A page it stays quiet about can still be wrong.) Every view — public, staff, participant — is
   rendered in `sandbox="allow-scripts"`, and without `allow-modals` the browser ignores the call
@@ -470,7 +470,7 @@ entry per page, each naming **who it is for**:
   keyword is not set."* Nothing throws, so a page that asks for a name with `prompt` submits an
   empty one, or looks like a button that does nothing. Ask with an `<input>` in the page and
   answer in an element of its own; that is the only thing that works here.
-- **A `<form>` CANNOT SUBMIT — draw a `<div>` and a `<button type="button">` instead.** (`deploy`
+- **A `<form>` CANNOT SUBMIT — draw a `<div>` and a `<button type="button">` instead.** (`check`
   and `publish` warn about a `<form>` for the same reason they warn about a modal, and go through
   anyway.) The frame is `sandbox="allow-scripts"` with no `allow-forms`, and the browser blocks the
   submission **before** it fires the `submit` event — so an `onsubmit` handler never runs at all,
@@ -492,9 +492,9 @@ can change, the addresses of the colleagues who may change it. The platform does
 not stop an owner's own page from moving an owner's own data, and does not pretend to; the author
 should know that is what they are writing.
 
-Deploy stages the pages the way it stages schemas, so the roster can try the staff page at
-`/staging/{aid}` before any customer sees it. Publish promotes them; a page dropped from `views`
-is DELETED at both ends rather than left behind.
+Publish writes the pages the way it writes schemas, into the tier each audience may read. A page
+dropped from `views` is DELETED rather than left behind: the tier is readable by everyone it
+admits, forever, so not writing it again is not enough.
 
 ### What a page may WRITE
 
@@ -528,7 +528,7 @@ above) only on a runtime that has it.
 **Call `ready()` once, after registering `onState` — nothing arrives until you do.** The parent
 holds the app's data until the view answers the handshake, so a page that listens and never says
 `ready()` waits on a send that was never made: it draws its loading line and stays on it forever,
-with no error at either end. (`deploy` and `publish` warn when a page registers `onState` and
+with no error at either end. (`check` and `publish` warn when a page registers `onState` and
 calls no `ready`.)
 
 ```js
@@ -614,11 +614,9 @@ Then `manageSharedApp` with `action: "publish"`.
 
 - **Live records that do not fit the schema you are about to write.** It lists them. Migrate them,
   or pass `confirm: true` — after telling the user what breaks, not before.
-- **A confirm on `deploy` does not carry to `publish`.** They are different sentences: one says
-  "stage it anyway", the other says "let everyone have it".
-- **`publish` promotes what was deployed**, not what is in the working tree. If the user edited
-  something after the last deploy, deploy again first — otherwise you publish a version nobody
-  looked at.
+- **`publish` writes THIS working tree**, immediately and for everybody. It used to promote a
+  version the roster had reviewed at `/staging/{aid}`; there is no such copy any more, so `preview`
+  (step 3) is the only thing between what you wrote and what they see.
 
 ## Before you ask the user a question
 
@@ -633,8 +631,9 @@ Do not ask which storage to use, whether to make it "an app", or what to call th
 
 ## Where people actually look — say what is true today
 
-- **The roster's entrance exists.** After a deploy, `manageSharedApp` reports the address; hand
-  that to the people you invited.
+- **The roster's entrance exists.** `manageSharedApp` reports the address; hand that to the people
+  you invited. It works from `init` — the URL name is reserved there, and the roster can resolve it
+  before anything is public.
 - **The public page does not exist yet.** Publishing writes everything a public page needs and
   turns the URL name on, but the page that renders it is not built. So do not promise the user a
   link to hand out at an event. What works end to end today is an app used by the people on its
@@ -647,7 +646,7 @@ watched you build it.
 
 `manageSharedApp` and `manageCollection` are only offered in a cell whose directory has the
 workspace-data tool group. If they are not in your tool list, **stop and say so**: a shared app
-cannot be deployed from here, and writing `app.json` and a schema by hand produces files nothing
+cannot be published from here, and writing `app.json` and a schema by hand produces files nothing
 can act on. Point the user at the launcher's tool-group switch for this folder rather than
 carrying on.
 
@@ -658,9 +657,9 @@ repair made things worse — an `aid` was deleted and a second app was created b
 
 - **`getSchema` / `putSchema` says "unknown collection".** The schema was not ACCEPTED. With
   `init` having written the `aid`, that means it failed validation — read it back against
-  `schemaDocs` rather than deploying past it. (Before `init` existed this could also mean "no aid
-  yet"; it no longer does, and treating it that way deploys an app with the collection missing.)
+  `schemaDocs` rather than publishing past it. (Before `init` existed this could also mean "no aid
+  yet"; it no longer does, and treating it that way publishes an app with the collection missing.)
 - **Anything about permissions on `apps/{aid}`.** The `aid` in `app.json` is the app's identity.
-  Removing it does not reset anything: the next deploy mints a NEW one and the old app stays where
-  it is, owned by nobody who can reach it. If a deploy is refused, read what it says and fix that;
+  Removing it does not reset anything: the next `init` mints a NEW one and the old app stays where
+  it is, owned by nobody who can reach it. If a publish is refused, read what it says and fix that;
   never edit the `aid` by hand.

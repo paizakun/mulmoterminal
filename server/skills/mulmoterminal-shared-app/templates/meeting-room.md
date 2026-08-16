@@ -212,7 +212,7 @@
   `result.error` にあります
 - **`requesterEmail` は送らない。** サインインした訪問者のアドレスを親が入れます
 
-**deploy の前に、プレビューで実際に押してもらってください** — Collections ペインの
+**publish の前に、プレビューで実際に押してもらってください** — Collections ペインの
 「Preview the shared app」で、`/a/{slug}` と**同じ親・同じサンドボックス**のままこのページが
 動きます（[SKILL.md](../SKILL.md) の「3b. RUN THE PAGE」）。ここの不具合は読んでも見つからず、
 押すと確認ダイアログが出るところまで見て初めて分かります。

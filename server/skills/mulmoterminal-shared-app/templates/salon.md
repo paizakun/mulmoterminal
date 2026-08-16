@@ -203,7 +203,7 @@
 - **`customerEmail` は送らない。** サインインした訪問者のアドレスを親が入れます
   （ルールがトークンと突き合わせるので、入力欄にすると間違えられるだけの欄になります）
 
-**deploy の前に、プレビューで実際に押してもらってください** — Collections ペインの
+**publish の前に、プレビューで実際に押してもらってください** — Collections ペインの
 「Preview the shared app」で、`/a/{slug}` と**同じ親・同じサンドボックス**のままこのページが
 動きます（[SKILL.md](../SKILL.md) の「3b. RUN THE PAGE」）。ここの不具合は読んでも見つからず、
 押すと確認ダイアログが出るところまで見て初めて分かります。
@@ -478,10 +478,11 @@ view.onState((data, viewer) => {
    格子。埋まっている枠は選べない）
 4. `check` — ここで `assigneeField` の型、ロールの過不足、鏡の片側落ち、ビューが読むと
    宣言したコレクションが `public.read` に無いこと、が出ます
-5. `deploy` → 名簿の人に URL を渡す
+5. `preview` でページを実際に走らせ、`publish` → 名簿の人に URL を渡す（`public` を宣言して
+   いなければ、これで公開はされません）
 6. スタッフを `invite`（担当者は `role: "assignee"` と `cid: "bookings"`）
 7. 枠を作る（`opensAt` / `closesAt` / `state: "open"` を入れて `slots` に流し込む）
-8. 客に開くときだけ `publish`
+8. 客に開くのは `public` を宣言して `publish` し直したときだけ
 
 **排他に関わるキーは、レコードが 1 行でもあると変えられません**（`idFrom` / `idField` /
 `idIn` / `mirror` / `mirrorOf`）。publish が拒否し、`confirm` でも通りません — 変えると

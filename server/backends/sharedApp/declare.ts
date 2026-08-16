@@ -14,7 +14,8 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { APP_MANIFEST_FILE, firestoreHandle } from "@mulmoclaude/core/collection/server";
-import { APPS_COLLECTION, parseAuthoredApp } from "@receptron/sharedapp";
+import { holdNewName } from "./establish.js";
+import { APPS_COLLECTION, parseAuthoredApp, type AuthoredApp } from "@receptron/sharedapp";
 import { isRecord } from "../../../common/isRecord.js";
 import { declarationProblems, sharedCollections, type SharedAppFailure } from "./context.js";
 import { createManifest, newAid, updateManifest } from "./manifestWrite.js";
@@ -75,6 +76,9 @@ export async function initSharedApp(root: string, name: string | undefined, slug
     };
   }
   const aid = newAid();
+  // The roster, and nothing else — see `reserveApp`. Held as a value because the slug reservation
+  // below records the name it took ON this document, and the two must agree byte for byte.
+  const reservation = { owner: handle.uid, members: { [handle.email]: { "*": "owner" } }, memberEmails: [handle.email] };
   // Claimed in Firestore BEFORE it is written to disk, and the app is refused if the claim fails.
   //
   // `apps/{aid}` is a shelf every user of the deployment shares, and its `allow create` asks only
@@ -88,7 +92,7 @@ export async function initSharedApp(root: string, name: string | undefined, slug
   // The reservation carries the roster and nothing else — no `public`, no `collections` — so it
   // grants exactly one thing: this address is the owner. Deploy's `set` then lands as an update by
   // the same owner, which is what it always was for an app deployed twice.
-  const reserved = await reserveApp(handle, aid, "init");
+  const reserved = await reserveApp(handle, aid, reservation, "init");
   if (reserved) return reserved;
 
   const manifest: Record<string, unknown> = {
@@ -113,7 +117,20 @@ export async function initSharedApp(root: string, name: string | undefined, slug
       ],
     };
   }
-  return { ok: true, aid, owner: handle.email, slug };
+  // THE NAME IS TAKEN NOW, not at publish.
+  //
+  // An app EXISTS from the moment it is created — that is what makes its records writable and
+  // `preview` worth running (`plans/feat-shared-app-no-staging.md`) — and its address should not
+  // change out from under everything written about it in between. The reservation resolves for
+  // the app's own ROSTER while `published` is false, so `/m/{slug}` works immediately and nobody
+  // outside can even see that the name is taken.
+  //
+  // The cost is stated rather than hidden: `appSlugs` has `allow delete: if false`, so an
+  // abandoned app burns a name. That is why the name is the one the AUTHOR wrote and never one
+  // this code invents.
+  const held = await holdNewName(handle, aid, root, slug, reservation);
+  if (!held.ok) return held;
+  return { ok: true, aid, owner: handle.email, slug: held.slug ?? slug };
 }
 
 /** Take the aid on the shared shelf, as this session, carrying only the roster.
@@ -125,6 +142,7 @@ export async function initSharedApp(root: string, name: string | undefined, slug
 async function reserveApp(
   handle: { docs: { set: (c: string, id: string, doc: Record<string, unknown>) => Promise<unknown> }; email: string; uid: string },
   aid: string,
+  doc: Record<string, unknown>,
   /** Which operation is asking — because the sentence that says how to RETRY differs, and getting
    *  it wrong is worse than saying nothing. After a refused `init` the repository declares no app
    *  and `init` is the retry; after a refused `fork` it still declares the app it was cloned from,
@@ -132,11 +150,7 @@ async function reserveApp(
   retry: "init" | "fork",
 ): Promise<SharedAppFailure | null> {
   try {
-    await handle.docs.set(APPS_COLLECTION, aid, {
-      owner: handle.uid,
-      members: { [handle.email]: { "*": "owner" } },
-      memberEmails: [handle.email],
-    });
+    await handle.docs.set(APPS_COLLECTION, aid, doc);
     return null;
   } catch (err) {
     return {
@@ -180,21 +194,27 @@ export type ForkResult = ForkSuccess | SharedAppFailure;
  *  as `their-name-2`, which is not a name anybody chose.
  *
  *  It does not touch `.claude/skills/` at all. The schemas ARE what was cloned. */
-export async function forkSharedApp(root: string, name: string | undefined, slug: string | undefined): Promise<ForkResult> {
+/** The declaration this repository was cloned WITH — `fork` has to know whose app it is before it
+ *  replaces the roster, and a file it cannot read is not an answer to that. */
+async function forkSource(root: string): Promise<{ ok: true; app: AuthoredApp } | SharedAppFailure> {
   const raw = await readManifest(root);
   if (!raw.ok) return raw;
   const parsed = parseAuthoredApp(raw.text);
-  if (!parsed.ok) {
-    return {
-      ok: false,
-      partial: false,
-      problems: [
-        ...parsed.problems,
-        "`fork` has to know whose app this is before it replaces the roster, and that is the declaration it just failed to read.",
-        "Repair app.json — or, if this repository was never an app, delete it and run `init`.",
-      ],
-    };
-  }
+  if (parsed.ok) return { ok: true, app: parsed.app };
+  return {
+    ok: false,
+    partial: false,
+    problems: [
+      ...parsed.problems,
+      "`fork` has to know whose app this is before it replaces the roster, and that is the declaration it just failed to read.",
+      "Repair app.json — or, if this repository was never an app, delete it and run `init`.",
+    ],
+  };
+}
+
+export async function forkSharedApp(root: string, name: string | undefined, slug: string | undefined): Promise<ForkResult> {
+  const parsed = await forkSource(root);
+  if (!parsed.ok) return parsed;
 
   const handle = firestoreHandle();
   if (!handle) {
@@ -226,7 +246,8 @@ export async function forkSharedApp(root: string, name: string | undefined, slug
   // Same order as `init`, for the same reason: the id is taken on the shared shelf BEFORE it
   // reaches a file that gets committed and read in a pull request.
   const aid = newAid();
-  const reserved = await reserveApp(handle, aid, "fork");
+  const reservation = { owner: handle.uid, members: { [handle.email]: { "*": "owner" } }, memberEmails: [handle.email] };
+  const reserved = await reserveApp(handle, aid, reservation, "fork");
   if (reserved) return reserved;
 
   const taken: ForkNotes = { carried: [], previousSlug: undefined };
@@ -258,7 +279,12 @@ export async function forkSharedApp(root: string, name: string | undefined, slug
       ],
     };
   }
-  return { ok: true, aid, owner: handle.email, slug, previousSlug: taken.previousSlug, carried: taken.carried };
+  // The name, taken now for `init`'s reason — and here it matters more: a fork starts from a
+  // repository whose `slug` named SOMEBODY ELSE's app, so leaving the new one nameless until
+  // publish is the state in which the two are easiest to confuse.
+  const held = await holdNewName(handle, aid, root, slug, reservation);
+  if (!held.ok) return held;
+  return { ok: true, aid, owner: handle.email, slug: held.slug ?? slug, previousSlug: taken.previousSlug, carried: taken.carried };
 }
 
 /** The refusal for a manifest that changed under the fork. PARTIAL: nothing reached the disk, but

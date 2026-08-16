@@ -37,20 +37,20 @@ describe("manageSharedApp, the tool", () => {
   it("is registered as a host tool and reaches the group the collections live in", () => {
     expect(HOST_TOOL_DEFINITIONS.map((d) => d.name)).toContain("manageSharedApp");
     // Ungrouped would mean it is offered only through the all-tools URL — a cell with the
-    // Collections pane would have the store and no way to deploy it.
+    // Collections pane would have the store and no way to publish it.
     expect(groupOfTool("manageSharedApp")).toBe("data");
   });
 
-  it("names the three operations in the schema the agent is given", () => {
-    expect(SHARED_APP_ACTIONS).toEqual(["init", "fork", "check", "preview", "invite", "deploy", "publish", "unpublish"]);
+  it("names the operations in the schema the agent is given", () => {
+    // `deploy` was one of these until staging was removed: an app is created (init) or published,
+    // and there is nothing in between to write.
+    expect(SHARED_APP_ACTIONS).toEqual(["init", "fork", "check", "preview", "invite", "publish", "unpublish"]);
     expect(MANAGE_SHARED_APP.parameters?.properties?.action).toMatchObject({ enum: [...SHARED_APP_ACTIONS] });
   });
 
   it("answers an unknown action with the ones that exist", async () => {
-    expect(await manageSharedApp(makeTempDir("mt-shared-tool-"), { action: "ship" })).toContain(
-      "init, fork, check, preview, invite, deploy, publish, unpublish",
-    );
-    expect(await manageSharedApp(makeTempDir("mt-shared-tool-"), {})).toContain("init, fork, check, preview, invite, deploy, publish, unpublish");
+    expect(await manageSharedApp(makeTempDir("mt-shared-tool-"), { action: "ship" })).toContain("init, fork, check, preview, invite, publish, unpublish");
+    expect(await manageSharedApp(makeTempDir("mt-shared-tool-"), {})).toContain("init, fork, check, preview, invite, publish, unpublish");
   });
 
   it("refuses to start an app in a repository that already declares one", async () => {
@@ -60,16 +60,16 @@ describe("manageSharedApp, the tool", () => {
     expect(await manageSharedApp(root, { action: "init", name: "Second" })).toContain("already");
   });
 
-  it("calls a sound declaration deployable while signed out", async () => {
+  it("calls a sound declaration publishable while signed out", async () => {
     // The publisher check asks whether the caller is an app-wide owner, so an empty address is not
     // neutral — it reported a missing owner for every signed-out call, and `check` could never
-    // come back clean. Signed out, the honest question is "would this deploy for the owner it
+    // come back clean. Signed out, the honest question is "would this publish for the owner it
     // names?", and the answer has to be able to be yes.
     const root = makeTempDir("mt-shared-tool-");
     writeFileSync(path.join(root, "app.json"), JSON.stringify({ aid: "a1", name: "Survey", members: { "o@e.com": { "*": "owner" } } }));
 
     const message = await manageSharedApp(root, { action: "check" });
-    expect(message).toContain("deployable");
+    expect(message).toContain("publishable");
     expect(message).toContain("o@e.com");
   });
 
@@ -153,9 +153,9 @@ describe("manageSharedApp, the tool", () => {
   it("returns every refusal as text rather than throwing", async () => {
     const root = makeTempDir("mt-shared-tool-");
     writeFileSync(path.join(root, "app.json"), JSON.stringify({ aid: "a1", members: {} }));
-    // The three that reach the APP need a session and say so. `check` and `invite` are about the
+    // The two that reach the APP need a session and say so. `check` and `invite` are about the
     // file and need none; `init` refuses here because the declaration already exists.
-    for (const action of ["deploy", "publish", "unpublish"]) {
+    for (const action of ["publish", "unpublish"]) {
       const message = await manageSharedApp(root, { action });
       expect(typeof message).toBe("string");
       expect(message).toContain("signed-in Firestore session");
@@ -164,7 +164,7 @@ describe("manageSharedApp, the tool", () => {
 
   // The addresses this file prints are the ones the author hands to a visitor, and the router
   // that serves them is in ../mulmoserver (`src/router/index.ts`): `a/:slug` is the public face,
-  // with `m/:slug`, `p/:slug` and `staging/:aid` beside it. There is NO bare `/:slug` route — it
+  // with `m/:slug` and `p/:slug` beside it. There is NO bare `/:slug` route — it
   // falls through to NotFound — so dropping the prefix is not a message that reads badly, it is
   // an address that opens nothing. It shipped that way: a published app was announced as "OPEN to
   // anonymous visitors at /meeting-rooms" while the booking page was at /a/meeting-rooms, and the

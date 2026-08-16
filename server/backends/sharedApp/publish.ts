@@ -1,4 +1,4 @@
-// publish — promote what the roster tested, and open it LAST.
+// publish — write the app, and open it LAST.
 //
 // The one dangerous operation in a shared app (design D10). Merging a pull request changes
 // nobody's screen; publishing changes everyone's, immediately, and in two ways at once: a breaking
@@ -8,8 +8,11 @@
 //
 // Two properties are load-bearing and neither is obvious from the call site:
 //
-//   - it PROMOTES `staging/{cid}` rather than re-projecting the working tree, so what shipped is
-//     what the roster reviewed;
+//   - it writes EVERYTHING the app is, from the working tree, in one operation: the roster, the
+//     schemas, the pages and the rule configuration. It used to promote `staging/{cid}` — what a
+//     previous `deploy` had put where only the roster could see it — and that half is gone
+//     (`plans/feat-shared-app-no-staging.md`). What stands in its place is `preview`, which runs
+//     the pages here, on the author's machine, before any of this is written;
 //   - it writes `apps/{aid}.public` LAST, as its own write, because that block — not the
 //     world-readable `config/public` projection — is what the rules read to authorize anonymous
 //     access. A run that stops part-way therefore leaves the app private.
@@ -18,35 +21,33 @@
 // visitors, not a brief exposure, and it is the trade the ordering is chosen for.
 //
 // The other half of that trade, stated because it is what an ordering review asks about: while a
-// LIVE app is being re-published, the OLD `public` block stays in force across the promotions, so
+// LIVE app is being re-published, the OLD `public` block stays in force across the writes, so
 // a run that fails part-way leaves the app open on a mixed set of versions. That is accepted, and
 // it is not an access change — the old block is what authorizes those reads, so a collection that
 // only the NEW declaration would have opened stays closed (`publicRead` tests the cid against the
 // `public.read` list that is still live). Closing first would trade a mixed-version window for a
 // deliberate outage on every re-publish, and a failure there leaves the app DARK rather than
 // stale — worse for the person the app is for, and not what the design chose (see D10's ordering).
-import { isRecord } from "../../../common/isRecord.js";
 import { type LoadedCollection } from "@mulmoclaude/core/collection/server";
-import {
-  APPS_COLLECTION,
-  PUBLIC_CONFIG_DOC,
-  appConfigPath,
-  appSchemasPath,
-  promoteSchema,
-  projectPublish,
-  stagedRuleConfig,
-  type AuthoredApp,
-  type PublishStamp,
-} from "@receptron/sharedapp";
+import { APPS_COLLECTION, PUBLIC_CONFIG_DOC, appConfigPath, appSchemasPath, projectPublish, type AuthoredApp, type PublishStamp } from "@receptron/sharedapp";
 import { ensureAid } from "./ensureAid.js";
-import { sharedAppContext, stampFor, type SharedAppFailure, type SharedAppHandle, type SharedAppOptions } from "./context.js";
+import {
+  readCurrentApp,
+  schemasOf,
+  sharedAppContext,
+  stampFor,
+  type SharedAppContext,
+  type SharedAppFailure,
+  type SharedAppHandle,
+  type SharedAppOptions,
+} from "./context.js";
 import { recordRefusal, scanRecords, type RecordScan } from "./records.js";
-import { readStaged, type StagedEntry } from "./staged.js";
 import { oversizeProblem, publicFormOf, publicInputProblems, type PublicForm } from "./publicForm.js";
-import { generationProblems, planTierPromotion, promotedIdsOf, promotionWrites, type TierPromotion } from "./appViews.js";
+import { allTierWrites, pageIdsOf, planTierWrites, type PlannedTier } from "./appViews.js";
 import { PUBLIC_VIEW_DOC, declaredView, readAppViewFile, type ViewFile } from "./publicView.js";
 import { frozenKeyProblems } from "./exclusivity.js";
-import { stagedScopeProblems } from "./scopedFields.js";
+import { scopedFieldProblems } from "./scopedFields.js";
+import { claimApp, reserveHeldSlug } from "./establish.js";
 import { setSlugPublished } from "./slug.js";
 import { runWrites, type WriteStep } from "./writes.js";
 
@@ -77,70 +78,27 @@ export interface PublishSuccess {
 
 export type PublishResult = PublishSuccess | SharedAppFailure;
 
-/** The staged version as something the record scan can run against: this repository's collection,
- *  with the STAGED schema in place of the one on disk.
- *
- *  Validating the working tree's schema would answer the wrong question — the tree may have moved
- *  on since the deploy, and the version being promoted is the staged one. */
-function stagedForValidation(
-  staged: readonly StagedEntry[],
-  collections: readonly LoadedCollection[],
-): { ok: true; collections: LoadedCollection[] } | { ok: false; problems: string[] } {
-  const byCid = new Map(collections.map((collection) => [collection.slug, collection]));
-  const scanned: LoadedCollection[] = [];
-  const problems: string[] = [];
-  for (const entry of staged) {
-    const collection = byCid.get(entry.cid);
-    if (!collection) {
-      // Fail closed rather than promote it unchecked: the records live in the app and would be
-      // read under this schema by everyone, and nothing here can tell whether they still fit.
-      problems.push(
-        `'${entry.cid}' is staged but is not a collection in this repository any more, so its live records cannot be checked against the version about to be published. ` +
-          "Run deploy again — it re-stages what the repository actually has and drops what it does not.",
-      );
-      continue;
-    }
-    scanned.push({ ...collection, schema: entry.doc.publishedSchema });
-  }
-  // The other direction, and the one that is not symmetric with it: a collection the repository
-  // HAS and staging does not.
-  //
-  // "staging is non-empty" is not the same question. A deploy writes the staged documents one at
-  // a time, so one that failed part-way leaves a NONEMPTY but incomplete set — and publishing that
-  // opens an app whose declaration names a collection with no published schema behind it. The
-  // deploy said so at the time, but publish must not be the step that ships the subset anyway.
-  //
-  // It also catches the ordinary version of the same mistake: a collection added to the
-  // repository and never deployed. Both answers are the same one — run deploy first.
-  const stagedCids = new Set(staged.map((entry) => entry.cid));
-  const missing = collections.map((collection) => collection.slug).filter((cid) => !stagedCids.has(cid));
-  if (missing.length > 0) {
-    problems.push(
-      `not staged, so there is no reviewed version to promote: ${missing.join(", ")}. ` +
-        "Run deploy first — publishing now would open the app with those collections missing from it, which is not the version anybody reviewed at /staging.",
-    );
-  }
-  return problems.length > 0 ? { ok: false, problems } : { ok: true, collections: scanned };
-}
-
-/** The writes, in the order the design fixes: promote, project, then open. */
+/** The writes, in the order the design fixes: the data, then the app document, then open. */
 interface PublishStepsInput {
   handle: SharedAppHandle;
   aid: string;
-  staged: readonly StagedEntry[];
   stamp: PublishStamp;
   face: ReturnType<typeof projectPublish>;
   slug: string | undefined;
   form: PublicForm;
   view: ViewFile | null;
-  tiers: readonly TierPromotion[];
+  tiers: readonly PlannedTier[];
+  /** Written already by `claimApp`, byte for byte, when this publish created the app document to
+   *  make the record scan answerable. Writing it twice is harmless and saying so is not: the
+   *  second write is skipped so the step list reads as what actually happened. */
+  established: boolean;
 }
 
-function publishSteps({ handle, aid, staged, stamp, face, slug, form, view, tiers }: PublishStepsInput): WriteStep[] {
+function publishSteps({ handle, aid, stamp, face, slug, form, view, tiers, established }: PublishStepsInput): WriteStep[] {
   return [
-    ...staged.map(({ cid, doc }) => ({
-      what: `the published schema for '${cid}' (apps/${aid}/collections/${cid})`,
-      run: () => handle.docs.set(appSchemasPath(aid), cid, promoteSchema(doc, stamp)),
+    ...face.schemas.map(({ cid, doc }) => ({
+      what: `the schema for '${cid}' (apps/${aid}/collections/${cid})`,
+      run: () => handle.docs.set(appSchemasPath(aid), cid, doc),
     })),
     {
       what: `the public config document (apps/${aid}/config/${PUBLIC_CONFIG_DOC})`,
@@ -169,21 +127,20 @@ function publishSteps({ handle, aid, staged, stamp, face, slug, form, view, tier
         await handle.docs.set(appConfigPath(aid), PUBLIC_VIEW_DOC, { html: view.html, publishedAt: stamp.publishedAt });
       },
     },
-    // The members' and participants' pages, copied from `staged:` to `live:`
-    // and withdrawn when the last deploy dropped them. Before the app document
-    // and the authorization, like everything else that is only DATA: a run that
-    // stops here leaves an app whose pages are newer than its roster, which is
-    // the direction to be wrong in.
-    ...promotionWrites(handle, aid, tiers),
-    // The app document WITHOUT `public`: the promoted rule configuration lands with the schemas it
-    // was staged beside, so the public write path is never judged by one version's constraints
-    // against another's schema.
-    { what: `the app document (apps/${aid})`, run: () => handle.docs.set(APPS_COLLECTION, aid, face.app) },
+    // The members' and participants' pages, written from the working tree and withdrawn when this
+    // publish drops them. Before the app document and the authorization, like everything else that
+    // is only DATA: a run that stops here leaves an app whose pages are newer than its roster,
+    // which is the direction to be wrong in.
+    ...allTierWrites(handle, aid, tiers, stamp),
+    // The app document WITHOUT `public`: the rule configuration lands beside the schemas it was
+    // projected with, so the public write path is never judged by one version's constraints
+    // against another's schema. Skipped when `claimApp` wrote exactly this a moment ago.
+    ...(established ? [] : [{ what: `the app document (apps/${aid})`, run: () => handle.docs.set(APPS_COLLECTION, aid, face.app) }]),
     // The URL name follows the app's own openness — `face.public` — and NOT the fact that a
     // publish happened.
     //
-    // A published reservation is world-readable, and what it reveals is the aid, which is the
-    // `/staging/{aid}` entrance this whole feature keeps unguessable. So publishing a declaration
+    // A published reservation is world-readable, and what it reveals is the aid, which addresses
+    // everything under `apps/{aid}`. So publishing a declaration
     // with no `public` block — a roster-only app, which is a normal thing to publish — must not
     // make its name resolvable: that would hand out the private entrance while the operation
     // itself reports the app is closed to anonymous visitors.
@@ -207,45 +164,29 @@ function publishSteps({ handle, aid, staged, stamp, face, slug, form, view, tier
   ];
 }
 
-/** Everything that must hold before a promotion: something IS staged, the staged set matches the
- *  repository, and the live records fit the version about to become public. Split out for the
- *  line budget, and it reads as the one thing it is — the gate. */
-async function stagedGate(
+/** Everything that must hold before anything is written: the declaration agrees with the schemas
+ *  this repository actually has, and the live records fit the version about to become public.
+ *
+ *  Split out for the line budget, and it reads as the one thing it is — the gate. It used to have
+ *  a first clause the others hung off — "something IS staged, and the staged set matches the
+ *  repository" — which is not a question any more: what publishes is what the repository holds. */
+async function publishGate(
   authored: AuthoredApp,
-  staged: readonly StagedEntry[],
   collections: readonly LoadedCollection[],
-  aid: string,
   root: string,
   confirm: boolean | undefined,
 ): Promise<{ ok: true; scan: RecordScan } | SharedAppFailure> {
-  if (staged.length === 0) {
-    return {
-      ok: false,
-      partial: false,
-      problems: [
-        `nothing is staged for apps/${aid}, so there is nothing to promote. Run deploy first — publish promotes what the roster reviewed at /staging/${aid} rather than reading the working tree.`,
-      ],
-    };
-  }
-  const toScan = stagedForValidation(staged, collections);
-  if (!toScan.ok) return { ...toScan, partial: false };
-  // Against the STAGED schemas, not the tree the deploy gate already checked: the declaration can
-  // have gained a field since, and publishing it would make the rules demand a field the form
-  // cannot draw.
-  const drifted = publicInputProblems(
-    authored,
-    staged.map((entry) => ({ cid: entry.cid, schema: entry.doc.publishedSchema })),
-    "staged",
-  );
+  const schemas = schemasOf(collections);
+  const drifted = publicInputProblems(authored, schemas);
   if (drifted.length > 0) return { ok: false, partial: false, problems: drifted };
-  // The PAIR publish actually writes: the staged rule configuration and schemas
-  // on one side, the manifest's roster on the other. Neither the deploy gate nor
-  // the drift check above looks at that combination, and it is where an
-  // `assignee` can end up with no field to be compared against.
-  const scoped = stagedScopeProblems(authored, staged);
+  // The PAIR publish writes: the rule configuration and the schemas on one side, the manifest's
+  // roster on the other. It is where an `assignee` can end up with no field to be compared
+  // against — and it is a field NAME against a SCHEMA, which is the half the declaration gate
+  // deliberately cannot see.
+  const scoped = scopedFieldProblems(authored, schemas);
   if (scoped.length > 0) return { ok: false, partial: false, problems: scoped };
-  const scan = await scanRecords(toScan.collections, root);
-  const refusal = recordRefusal(scan, "publish", confirm);
+  const scan = await scanRecords(collections, root);
+  const refusal = recordRefusal(scan, confirm);
   return refusal ? { ok: false, partial: false, problems: refusal } : { ok: true, scan };
 }
 
@@ -258,7 +199,6 @@ async function stagedGate(
 async function pageGate(
   root: string,
   authored: AuthoredApp,
-  staged: readonly StagedEntry[],
   live: Record<string, unknown> | null,
   handle: SharedAppHandle,
   publishedAt: number,
@@ -271,36 +211,71 @@ async function pageGate(
   // change move the id space they were written into". See ./exclusivity.ts —
   // `confirm` deliberately does not reach it.
   //
-  // The collection half is read from what DEPLOY staged, because that is what
-  // this publish promotes: `stagedRuleConfig` is the same function the
-  // projection uses, so the value judged is the value written.
-  // Copied because `stagedRuleConfig` takes a mutable array; the entries
-  // themselves are not touched.
-  const frozen = await frozenKeyProblems(authored, stagedRuleConfig([...staged]).collections ?? {}, live, handle);
+  // The collection half is the manifest's own, which is what this publish writes. It used to be
+  // read back from what a deploy had staged, because that was what publish promoted.
+  const frozen = await frozenKeyProblems(authored, authored.collections ?? {}, live, handle);
   if (frozen.length > 0) return { ok: false, problems: frozen };
   return { ok: true, view: view === null ? null : view.view };
 }
 
-/** The tiers to promote, once they are known to belong to the SAME deploy as
- *  the schemas beside them.
+/** What this publish is writing, and the app document it is writing it onto — established when it
+ *  was not there.
  *
- *  The two are written by one run, in sequence, and a run can stop between
- *  them — see `generationProblems`. Asked here, where both have been read and
- *  nothing has been written. */
-async function promotableTiers(
-  handle: SharedAppHandle,
-  aid: string,
-  stamp: PublishStamp,
-  staged: readonly StagedEntry[],
-): Promise<{ ok: true; tiers: TierPromotion[] } | SharedAppFailure> {
-  const tiers = await planTierPromotion(handle, aid, stamp);
-  if (!tiers.ok) return tiers;
-  const mixed = generationProblems(aid, staged, tiers.tiers);
-  return mixed.length > 0 ? { ok: false, partial: false, problems: mixed } : tiers;
+ *  Split from the run below because it is the only part with an ORDER of its own: read, project,
+ *  and then write the app document FIRST when it is missing, so the records under it can be read
+ *  by the gate that follows. */
+interface Prepared {
+  ok: true;
+  existingApp: Record<string, unknown> | null;
+  stamp: PublishStamp;
+  dirty: boolean;
+  face: ReturnType<typeof projectPublish>;
+  appDoc: Record<string, unknown>;
+  held: string | undefined;
+  /** Whether the app document was written by this call, rather than found. */
+  established: boolean;
+}
+
+async function prepare(root: string, aid: string, context: SharedAppContext, opts: SharedAppOptions): Promise<Prepared | SharedAppFailure> {
+  const { authored, collections, handle } = context;
+  // WHAT THE APP DOCUMENT IS, asked in the only way the rules allow. Reading `apps/{aid}` cannot
+  // tell you it is missing: the read rule resolves the roster out of the document itself, so for a
+  // document that does not exist the expression fails and the answer is DENIED — the same answer
+  // as somebody else's app. `init` writes it, so it is normally there; a repository whose app.json
+  // predates that, or one whose init failed part-way, arrives here without it.
+  const current = await readCurrentApp(handle, aid, "publish", "Publishing again is safe — this read only decides whether the app is created or updated.");
+  if (!current.ok) return current;
+  const existingApp = current.app;
+  const { stamp, dirty } = await stampFor(handle, root, opts);
+  const face = projectPublish(authored, schemasOf(collections), stamp, existingApp);
+
+  // The slug this app already holds, carried on the app document because NOTHING ELSE CAN BE
+  // ASKED: `appSlugs/{slug}` is unreadable to a stranger, so "do we already have one?" has no
+  // other answer. The projection does not carry it — the reservation is the host's business — so
+  // it is re-attached here, from the document as it stands.
+  const held = typeof existingApp?.slug === "string" ? existingApp.slug : undefined;
+  const appDoc = held === undefined ? face.app : { ...face.app, slug: held };
+
+  // ESTABLISH THE PARENT, THEN SCAN — rather than deciding that a missing app document means there
+  // are no records.
+  //
+  // It does not. Firestore deletes do not cascade, and this design documents the orphan state that
+  // leaves: `apps/{aid}` can be gone while `collections/*/items` beneath it survives. Reading the
+  // missing parent as an empty store would let a publish that re-creates it make those records
+  // readable under a schema nothing ever checked them against.
+  //
+  // What is written here grants nothing outside the roster — `public` is held back for the last
+  // write of the run, always — and it is the same document this publish is about to write anyway.
+  const established = existingApp === null;
+  if (established) {
+    const claimed = await claimApp(handle, aid, appDoc);
+    if (claimed) return claimed;
+  }
+  return { ok: true, existingApp, stamp, dirty, face, appDoc, held, established };
 }
 
 export async function publishSharedApp(root: string, opts: SharedAppOptions = {}): Promise<PublishResult> {
-  // Before anything reads the declaration: a repository that has never been deployed has no
+  // Before anything reads the declaration: a repository that has never been published has no
   // `aid` yet, and it is generated here rather than invented by the agent (D2b).
   const ensured = await ensureAid(root);
   if (!ensured.ok) return { ok: false, partial: false, problems: ensured.problems };
@@ -310,74 +285,75 @@ export async function publishSharedApp(root: string, opts: SharedAppOptions = {}
   const { authored, collections, handle } = context;
   const { aid } = authored;
 
-  const staged = await readStaged(handle, aid);
-  if (!staged.ok) return { ...staged, partial: false };
-  const gate = await stagedGate(authored, staged.staged, collections, aid, root, opts.confirm);
-  if (!gate.ok) return gate;
+  const ready = await prepare(root, aid, context, opts);
+  if (!ready.ok) return ready;
+  const { existingApp, stamp, dirty, face, appDoc, held, established } = ready;
+
+  const gate = await publishGate(authored, collections, root, opts.confirm);
+  if (!gate.ok) return { ...gate, partial: gate.partial || established };
   const scan = gate.scan;
 
-  let existing: unknown;
-  try {
-    existing = await handle.docs.get(APPS_COLLECTION, aid);
-  } catch (err) {
-    return {
-      ok: false,
-      partial: false,
-      problems: [
-        `publish failed while reading the current app document (apps/${aid}): ${err instanceof Error ? err.message : String(err)}`,
-        "Nothing was written. Publishing again is safe — this read carries `owner` forward and decides what a rollback would restore.",
-      ],
-    };
-  }
-  const { stamp, dirty } = await stampFor(handle, root, opts);
-  const existingApp = isRecord(existing) ? existing : null;
-  const face = projectPublish(authored, staged.staged, stamp, existingApp);
-
-  // The name this app HOLDS, which is the app document's — not necessarily the one `app.json`
-  // wants right now. An author who edits `slug` between deploy and publish has changed what the
-  // next deploy will reserve, not what this publish may flip: flipping a name this app never
-  // reserved is a write the rules refuse, and that refusal is the point of them.
-  const slug = typeof existingApp?.slug === "string" ? existingApp.slug : undefined;
-
-  const form = publicFormOf(authored, staged.staged);
+  const form = publicFormOf(authored, schemasOf(collections));
   // Before the first write: the config document is written in the middle of the run, so a database
-  // refusal there would land with the schemas already promoted.
+  // refusal there would land with the schemas already written.
   const oversize = oversizeProblem({ ...face.config, form });
-  if (oversize !== null) return { ok: false, partial: false, problems: [oversize] };
+  if (oversize !== null) return { ok: false, partial: established, problems: [oversize] };
 
-  // Also before the first write, and for the same reason: the page is read
-  // from disk and judged here, so a missing file or one written against the
-  // host's bridge stops the run rather than landing after the schemas have
-  // been promoted.
-  const page = await pageGate(root, authored, staged.staged, existingApp, handle, stamp.publishedAt);
-  if (!page.ok) return { ok: false, partial: false, problems: page.problems };
+  // Also before the first write, and for the same reason: the page is read from disk and judged
+  // here, so a missing file or one written against the host's bridge stops the run rather than
+  // landing after the schemas.
+  const page = await pageGate(root, authored, existingApp, handle, stamp.publishedAt);
+  if (!page.ok) return { ok: false, partial: established, problems: page.problems };
 
-  // The members' and participants' pages, PROMOTED from what deploy staged —
-  // not re-read from the working tree. See `planTierPromotion`.
-  const pages = await promotableTiers(handle, aid, stamp, staged.staged);
-  if (!pages.ok) return pages;
+  // The members' and participants' pages, read off disk and paired with what is already there, so
+  // a page withdrawn from `views` is removed rather than left readable.
+  const pages = await planTierWrites(handle, aid, { root, authored, stamp });
+  if (!pages.ok) return { ...pages, partial: established };
 
-  const steps = publishSteps({ handle, aid, staged: staged.staged, stamp, face, slug, form, view: page.view, tiers: pages.tiers });
+  // THE NAME, BEFORE THE WRITES — and after the app document exists, because `appSlugs`' create
+  // rule resolves the owner through `get(apps/{aid})`.
+  //
+  // `init` reserves the declared name, so this is the app that gained a `slug` afterwards, or the
+  // one whose init could not finish the reservation. It has to happen BEFORE the run rather than
+  // after it: recording a new reservation writes the app document, and the app document written
+  // last by a publish is the one carrying the `public` block. Reserving afterwards would write a
+  // copy without it and silently close the app it had just opened.
+  const reserved = await reserveHeldSlug({ handle, aid, root, wanted: authored.slug, held, appDoc, publicOpen: face.public !== undefined });
+  if (reserved !== undefined && !reserved.ok) return { ...reserved, partial: reserved.partial || established };
+  const slug = reserved?.slug ?? held;
+  const withSlug = slug === undefined ? face.app : { ...face.app, slug };
+
+  const steps = publishSteps({
+    handle,
+    aid,
+    stamp,
+    face: { ...face, app: withSlug },
+    slug,
+    form,
+    view: page.view,
+    tiers: pages.tiers,
+    // Already written, byte for byte: `claimApp` wrote this projection, and a reservation made
+    // just now rewrote the same thing with the name on it.
+    established,
+  });
   const failure = await runWrites(steps, "publish");
   if (failure) return failure;
 
   return {
     ok: true,
     aid,
-    cids: staged.staged.map((entry) => entry.cid),
+    cids: face.schemas.map((entry) => entry.cid),
     publicOpen: face.public !== undefined,
-    // Which pages this publish put live, per tier. Said out loud because the
-    // data behind a members' page is NOT public data — the argument that made
-    // the public view safe (a view can only carry off what any stranger could
-    // fetch) does not hold here, and the operator should know they published
-    // one.
-    memberPages: promotedIdsOf(pages.tiers, "member"),
-    participantPages: promotedIdsOf(pages.tiers, "roster"),
+    // Which pages this publish put live, per tier. Said out loud because the data behind a
+    // members' page is NOT public data — the argument that made the public view safe (a view can
+    // only carry off what any stranger could fetch) does not hold here.
+    memberPages: pageIdsOf(pages.tiers, "member"),
+    participantPages: pageIdsOf(pages.tiers, "roster"),
     slug,
     commit: stamp.commit,
     dirty,
     recordIssues: scan.records,
     recordIssuesCapped: scan.capped,
-    warnings: page.view?.warnings ?? [],
+    warnings: [...pages.warnings, ...(page.view?.warnings ?? [])],
   };
 }

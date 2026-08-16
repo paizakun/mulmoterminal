@@ -7,17 +7,15 @@
 // Three properties are load-bearing, and each of them is a way this could have been easier and
 // wrong (design: `plans/feat-shared-app-preview.md`):
 //
-//   IT PROJECTS THROUGH `projectPublish`, not `projectDeploy` and not the working tree. What a
-//   visitor's page reads is the PROJECTION — never the files in the repository — so a preview that
-//   handed the iframe the declaration would draw collections `public.read` does not open, fields
-//   publish would drop, and a config shaped unlike the published one. The two projections are also
-//   not interchangeable with each other: they disagree about unknown keys, so drawing from the
-//   deploy face would render something no visitor will ever see.
+//   IT PROJECTS THROUGH `projectPublish`, not from the working tree directly. What a visitor's
+//   page reads is the PROJECTION — never the files in the repository — so a preview that handed
+//   the iframe the declaration would draw collections `public.read` does not open, fields publish
+//   would drop, and a config shaped unlike the published one.
 //
-//   IT WRITES NOTHING. `projectDeploy(...).staging` is what a deploy would have put under
-//   `apps/{aid}/staging`, taken as a value and passed straight to `projectPublish` in place of a
-//   read. That is the whole trick, and it is why the two-stage write survives untouched: the stages
-//   are still there, this run simply does not perform them.
+//   IT WRITES NOTHING. It calls exactly what publish calls and keeps the answer. There used to be
+//   a step between: `projectDeploy(...).staging` was taken as a value and passed to
+//   `projectPublish` in place of a read, so the two-stage write survived untouched. There is one
+//   stage now (`plans/feat-shared-app-no-staging.md`) and the trick is simply the call.
 //
 //   IT REQUIRES NO SLUG. `appSlugs/{slug}` is one of the three writes that cannot be taken back,
 //   and it is the scarce one — the name comes out of a namespace everybody shares, and nothing can
@@ -27,15 +25,7 @@
 // What this does NOT prove is in the plan and belongs in whatever reports it: the rules do not run
 // here, other people's devices do not exist here, nothing is concurrent here, and — the one that
 // hides best — whether the rules a new declaration needs are deployed at all.
-import {
-  appSchemasPath,
-  projectDeploy,
-  projectPublish,
-  type AuthoredApp,
-  type PublishStamp,
-  type PublishedConfigDoc,
-  type StagedSchemaDoc,
-} from "@receptron/sharedapp";
+import { appSchemasPath, projectPublish, type PublishedConfigDoc } from "@receptron/sharedapp";
 import { readCurrentApp, schemasOf, sharedAppContext, stampFor, type SharedAppFailure, type SharedAppHandle, type SharedAppOptions } from "./context.js";
 import { planAppViewTiers, type TierPlan } from "./appViews.js";
 import { publicFormOf, type PublicForm } from "./publicForm.js";
@@ -64,17 +54,6 @@ export interface PreviewSuccess extends SharedAppPreview {
 }
 
 export type PreviewResult = PreviewSuccess | SharedAppFailure;
-
-/** What a deploy would stage, as a value. Nothing is written and nothing is read back: this is the
- *  same function deploy calls, asked for its answer instead of its effect. */
-function stagedFromWorkingTree(
-  authored: AuthoredApp,
-  collections: Parameters<typeof schemasOf>[0],
-  stamp: PublishStamp,
-  existing: Record<string, unknown> | null,
-): { cid: string; doc: StagedSchemaDoc }[] {
-  return projectDeploy(authored, schemasOf(collections), stamp, existing).staging;
-}
 
 /** One collection as a page asks for it: every row, or only the reader's own.
  *
@@ -233,8 +212,8 @@ export async function previewSharedApp(root: string, opts: SharedAppOptions = {}
   const existingApp = current.ok ? current.app : null;
 
   const { stamp } = await stampFor(handle, root, opts);
-  const staged = stagedFromWorkingTree(authored, collections, stamp, existingApp);
-  const face = projectPublish(authored, staged, stamp, existingApp);
+  // The same call publish makes, asked for its answer instead of its effect. Nothing is written.
+  const face = projectPublish(authored, schemasOf(collections), stamp, existingApp);
 
   const view = declaredView(authored);
   const page = view === null ? null : await readAppViewFile(root, view, stamp.publishedAt);
@@ -267,7 +246,7 @@ export async function previewSharedApp(root: string, opts: SharedAppOptions = {}
     ...tiers.plans.flatMap(tierRequests),
   ]);
 
-  const form = publicFormOf(authored, staged);
+  const form = publicFormOf(authored, schemasOf(collections));
 
   return {
     ok: true,
