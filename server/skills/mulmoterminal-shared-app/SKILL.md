@@ -252,13 +252,23 @@ press tells those apart — so the proof comes from the runtime injected into th
 the same realm as the event and knows whether `submit()` was called while a real click was being
 dispatched. Everything else is reported as **withheld** and nothing is written for it.
 
-Two ordinary things land in `withheld` and neither is a fault in the page:
+An app pinned to `@receptron/sharedapp` older than **0.9.0** lands in `withheld` for every
+submission — that runtime marks nothing, so the run writes nothing at all. It is not a fault in the
+page.
 
-- an app pinned to `@receptron/sharedapp` older than **0.9.0** — that runtime marks nothing, so
-  every submission is withheld and the run writes nothing at all;
-- **a control that saves from its own `change` handler** (a checkbox, a select). The browser runs
-  that after the click has finished being dispatched, so it cannot be marked. This is a known cost
-  paid on the side that writes nothing; do not report it to the user as a broken control.
+**A control that saves from its own `change` handler — a checkbox, a select — is worse than
+withheld: it is never exercised, and the report will not say so.** Two separate things:
+
+- the run presses button-like controls only (`button`, `[role=button]`, `input[type=submit|button]`),
+  so a page whose only save control is a toggle produces **no press at all** — and with no press
+  there is no `withheld` line to read;
+- while preparing the page the run ticks checkboxes and dispatches `change` itself, BEFORE the press
+  window. A page that saves from that handler therefore submits outside any press, and the runtime
+  would not mark it in any case (activation behaviour runs after the click's dispatch has ended).
+
+So for such a page the report can look completely clean while the save path has never run. **Say
+that plainly to the user rather than reading the silence as success**, and ask them to exercise the
+toggle in the Collections pane.
 
 There is also a **budget** on writes. Over it, a confirmation is declined rather than accepted, and
 the run says how many — read that count before concluding every control was exercised.
@@ -285,9 +295,12 @@ dialog. **It is deliberately not looser than production**: a preview kinder than
 would be a machine for producing "it worked on my machine".
 
 **Ask the user to open it once the headless run is clean** — it is the half you cannot do, because
-it puts a person in front of the page and lets them judge how it LOOKS, and because the headless
-run answers as the **author**: it cannot tell you what the rules would say to a visitor or to a
-participant, whose uid is not the author's. In
+it puts a person in front of the page and lets them judge how it LOOKS, and because it exercises the
+controls the headless run never presses (see the toggle case above). What it does NOT add is another
+identity: the pane posts to `/api/shared-app/preview/submit`, which calls the same
+`writePreviewSubmission` as the headless run, so **both write as the author**. Neither preview can
+tell you what the rules would say to a visitor or a participant — only a real session as that person
+does. In
 the cell open on this repository: the **Collections pane** → the **"Preview the shared app"** button at the top → the
 page appears, drawn from the working tree. Opening it reads only: nothing is written and no URL
 name is taken.

@@ -60,13 +60,18 @@ export const VIEW_MOUNT = "/view";
  *  and not here — four attempts to decide it from this side by counting and by waiting were each
  *  defeated by a page that simply waited longer (`plans/feat-headless-preview-parity.md`, D-2c).
  *
- *  ONE CONTROL IS UNMARKED AND IT IS NOT A BUG HERE: a checkbox or a select that saves from its own
- *  `change` handler. Activation behaviour runs AFTER the click's dispatch has ended, so such a
- *  submission is honestly `false` and this run writes nothing for it. The runtime cannot admit
- *  `change` instead — `element.click()` from script produces a trusted one — so the choice was
- *  between missing a real save-on-toggle and writing records for pages that never asked, and it
- *  fell on the side that writes nothing. A report that shows a toggle submitting but withheld is
- *  therefore expected, not a failure to explain away. */
+ *  A CHECKBOX OR SELECT THAT SAVES FROM ITS OWN `change` HANDLER IS NEVER MARKED. Activation
+ *  behaviour runs AFTER the click's dispatch has ended, so such a submission is honestly `false`.
+ *  The runtime cannot admit `change` instead — `element.click()` from script produces a trusted
+ *  one — so the choice was between missing a real save-on-toggle and writing records for pages that
+ *  never asked, and it fell on the side that writes nothing.
+ *
+ *  Do not expect to SEE that as a withheld press, though: `CLICKABLE` in `headlessPreview.ts` lists
+ *  button-like controls only, so such a control is never pressed and produces no press line at all.
+ *  The run's own field preparation ticks it and fires `change` before the press window, so whatever
+ *  it submits arrives outside any press. The visible result is a report with nothing in it about a
+ *  save path that was never exercised — which is why the tool description and the skill both have
+ *  to say so out loud. */
 // Re-exported, not `export ... from`: the browser side below reads the field off the wire and so
 // needs the value in scope here too.
 export { GESTURE_MARK };

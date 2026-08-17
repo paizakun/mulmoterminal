@@ -145,10 +145,12 @@ export interface HeadlessPress {
    *  submission whose CAUSE is unestablished. A record in somebody's real app needs a reason, and
    *  "it turned up while I was clicking" is not one.
    *
-   *  Two ordinary pages land here and neither is broken. An app pinned to a runtime older than
-   *  0.9.0 marks nothing at all, so every submission is withheld. And a control that saves from a
-   *  `change` handler is withheld on any version, because the mark cannot cover it — see
-   *  `GESTURE_MARK` for why that is the side the failure was put on. */
+   *  An app pinned to a runtime older than 0.9.0 marks nothing at all, so every submission is
+   *  withheld and nothing is written. That is not a broken page.
+   *
+   *  A control that saves from its own `change` handler does NOT land here, and the difference
+   *  matters: `CLICKABLE` never selects it, so there is no press and therefore no flag — the save
+   *  path is simply not covered, silently. See `GESTURE_MARK`. */
   writeWithheld: boolean;
   /** The browser reported a form submission the sandbox blocked. The page cannot see this happen —
    *  the `submit` event never fires, so `preventDefault()` never runs — and neither can the author,
