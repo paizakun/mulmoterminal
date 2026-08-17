@@ -154,7 +154,8 @@ trip.
 **That proof needs a session.** `check` answers offline, and offline it does NOT read the records —
 it says so in as many words ("the live records were NOT scanned"). A `check` that has not scanned
 them proves nothing about the batch you just wrote, so connect first, and read what it says about the
-records. Exactly one answer is a proof: the scan RAN, over every collection, and found nothing.
+records. Exactly one answer is a proof: the scan RAN, over every shared collection in this
+repository, and found nothing.
 Everything else is repaired first, and the rest are not degrees of that one — they are different
 repairs, and more than one can be reported at once (a collection that could not be read does not
 stop the others being scanned):
