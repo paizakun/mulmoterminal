@@ -144,13 +144,13 @@ Nothing generates them — the platform runs no code of its own — so they are 
 [枠の補充](./templates/meeting-room.md) covers the weekly refill task).
 
 **Prove ONE batch before you generate thousands.** Write a single day, read it back with
-`getItems`, then run `check` (step 4b). `putItems` and `getItems` do not check the same things:
-`putItems` refuses a row missing a required field or carrying an unknown `enum` value (and, under
-`mode: "create"`, an id that already exists) — but of what a row SAYS, that is all it looks at. The
-SHAPE of a typed value (a real date, a numeric `number`, a `datetime`'s exact format) is checked
-when a record is READ, and **refused at publish**. So 720 accepted rows are not 720 valid
-rows, and a publish that names them all is one regeneration per batch; one day first is one round
-trip.
+`getItems`, then run `check` (step 4b). `putItems` REFUSES a row missing a required field or
+carrying an unknown `enum` value (and, under `mode: "create"`, an id that already exists) — that is
+what it refuses, and it is not everything it checks. The SHAPE of a typed value (a real date, a
+numeric `number`, a `datetime`'s exact format) is **written and reported**: the answer carries a
+`lint` block beside `written`, and the same rows are **refused at publish**. So an empty `rejected`
+is not proof — 720 accepted rows are not 720 valid rows — and one day first is one round trip
+against one regeneration per batch.
 
 **That proof needs a session.** `check` answers offline, and offline it does NOT read the records —
 it says so in as many words ("the live records were NOT scanned"). A `check` that has not scanned
@@ -174,7 +174,9 @@ becomes `15:00Z` when the script runs in Seattle, and `16:00Z` for the same 08:0
 the offset moves too. Had the format been accepted, the app would have published with every row
 seven hours out — eight, on the dates the other side of the change. Build the string from its parts
 (`` `${dateKey}T${hh}:00` ``). A `stampField`'s `…Z` (step "limited number of places") is the one
-`datetime` shaped that way, and the rules write it — no script does.
+`datetime` shaped that way (nine fractional digits), and the rules write it — no script does.
+`putItems` flags the wrong shape in `lint` as it writes, so the reflex is caught on the first batch
+rather than at publish — if you read the answer.
 
 **Generate with a deterministic script, and do not write the rows out yourself.** Dates, month ends
 and daylight saving are what an LLM gets wrong, and a few hundred inline rows are tens of KB emitted
@@ -187,7 +189,15 @@ overlaps what is already there — silently overwrites fields nothing regenerate
 first does not save you: another run or a hand edit can create the same id in the gap between the
 read and the write. `create` has the host refuse a colliding row instead.
 
-**And then read `rejected`.** It is not a count and not only about collisions: `putItems` returns
+**And then read `rejected` AND `lint`.** They answer different questions, and only one of them is
+about rows that failed to land. `lint` appears beside `written` when a row WAS written and its
+values are the wrong shape — a `datetime` that is an instant, a `date` that is not a real day, a
+`number` holding text — with `total` (every flagged row) and `rows` (the first ten, as
+`{ id, problem }`). Those rows are in the collection and publish will refuse them, so a `lint` block
+is the generator to fix and the batch to rewrite, now rather than after the other 719. No `lint`
+key at all is the clean answer.
+
+`rejected` is the other half. It is not a count and not only about collisions: `putItems` returns
 `{ written, rejected }` with one `{ id, problem }` per refused row, and the `problem` is as likely
 to be a missing required field or an unknown `enum` value as an id that already existed. So go
 through them: every `problem` that is not "already exists" is a row that was NOT written, and it
