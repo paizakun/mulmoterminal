@@ -252,6 +252,18 @@ press tells those apart — so the proof comes from the runtime injected into th
 the same realm as the event and knows whether `submit()` was called while a real click was being
 dispatched. Everything else is reported as **withheld** and nothing is written for it.
 
+**An `async` click handler that awaits real work is withheld, and this is the one that will confuse
+an author.** These two are identical in shape and land on opposite sides:
+
+```js
+button.onclick = async () => { await Promise.resolve(); view.submit(...) }  // written
+button.onclick = async () => { await validate(); view.submit(...) }         // WITHHELD, if validate yields
+```
+
+The second resumes in a later task, and a later task is not the click however fast it was. So a save
+that checks something first writes nothing in a headless preview. **Say that is the reason** — an
+author told only "nothing was written" will go looking for a bug in a button that works.
+
 An app pinned to `@receptron/sharedapp` older than **0.9.0** lands in `withheld` for every
 submission — that runtime marks nothing, so the run writes nothing at all. It is not a fault in the
 page.

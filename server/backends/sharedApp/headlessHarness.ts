@@ -51,9 +51,21 @@ export const VIEW_MOUNT = "/view";
  *  What the runtime promises, and nothing on this side can check:
  *
  *    true  — `submit()` was called while a TRUSTED click was still being dispatched in that
- *            document: during a listener, or in a microtask of one.
- *    false — everything else. A `setTimeout`, an animation frame, `onState`, a promise that
- *            settled in a later turn, a click the page dispatched itself.
+ *            document: from a listener, or from a continuation ALREADY QUEUED when the dispatch
+ *            takes its microtask checkpoint (`await Promise.resolve()` qualifies).
+ *    false — everything else. A `setTimeout`, an animation frame, `onState`, a click the page
+ *            dispatched itself — and, importantly, `await` on work that actually yields.
+ *
+ *  THAT LAST ONE IS THE COMMON SHAPE AND IT IS NOT OBVIOUS. These two are identical in source and
+ *  land on opposite sides, because what decides it is when the continuation is queued, not that it
+ *  is `async`:
+ *
+ *    async () => { await Promise.resolve(); view.submit(...) }   marked
+ *    async () => { await validate(); view.submit(...) }          NOT marked, if validate yields
+ *
+ *  So a save that awaits a real check writes nothing in a headless preview. The author must be told
+ *  that is the reason, or they will conclude their button is broken. Pinned against a real browser
+ *  in `headlessPreview.spec.ts` ("marks a handler that awaits a MICROTASK").
  *
  *  It is deliberately a fact about the event loop rather than about elapsed time: a slow handler is
  *  still the handler, and a fast timer is still a timer. That is the whole reason it lives there

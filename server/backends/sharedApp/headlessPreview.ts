@@ -148,9 +148,13 @@ export interface HeadlessPress {
    *  An app pinned to a runtime older than 0.9.0 marks nothing at all, so every submission is
    *  withheld and nothing is written. That is not a broken page.
    *
+   *  The one that surprises authors: a handler that `await`s work which actually yields
+   *  (`await validate()` doing I/O) resumes in a later task, so its submission lands here and is
+   *  not written. Awaiting an already-resolved promise does not — see `GESTURE_MARK`.
+   *
    *  A control that saves from its own `change` handler does NOT land here, and the difference
    *  matters: `CLICKABLE` never selects it, so there is no press and therefore no flag — the save
-   *  path is simply not covered, silently. See `GESTURE_MARK`. */
+   *  path is simply not covered, silently. */
   writeWithheld: boolean;
   /** The browser reported a form submission the sandbox blocked. The page cannot see this happen —
    *  the `submit` event never fires, so `preventDefault()` never runs — and neither can the author,

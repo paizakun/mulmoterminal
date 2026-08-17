@@ -72,6 +72,38 @@ function expectNoRecord(pages: HeadlessPageReport[], id: string, want: { submitt
   expect(page?.presses[0]?.write, id).toBeNull();
 }
 
+/** A button whose handler awaits an ALREADY-RESOLVED promise before submitting.
+ *
+ *  The continuation is queued as a microtask while the listener is still on the stack, so it runs
+ *  at the checkpoint the dispatch takes between listeners — before `eventPhase` resets. */
+const AWAITS_A_MICROTASK = `
+<button type="button" id="go">Order</button>
+<script>
+  const view = window.__MC_APP_VIEW;
+  view.onState(() => {});
+  view.ready();
+  document.getElementById("go").addEventListener("click", async () => {
+    await Promise.resolve();
+    view.submit("orders", { name: "after a microtask" });
+  });
+</script>`;
+
+/** The same shape, but awaiting REAL async work — the case a reviewer is right to ask about.
+ *
+ *  `await validate()` where validating actually yields puts the continuation in a later task, and a
+ *  later task is not the dispatch however short the wait was. */
+const AWAITS_REAL_WORK = `
+<button type="button" id="go">Order</button>
+<script>
+  const view = window.__MC_APP_VIEW;
+  view.onState(() => {});
+  view.ready();
+  document.getElementById("go").addEventListener("click", async () => {
+    await new Promise((r) => setTimeout(r, 0));
+    view.submit("orders", { name: "after real async work" });
+  });
+</script>`;
+
 const WORKS = `
 <div id="menu">loading…</div>
 <input id="name">
@@ -343,6 +375,42 @@ describe.skipIf(!chromeReady)("a headless run, in a real browser", () => {
     expect(unreachable?.presses[1]?.notClickable).toBe(true); // display:none — no box to aim at
     expect(unreachable?.presses[1]?.submitted).toBeNull();
   });
+
+  it("marks a handler that awaits a MICROTASK, and withholds one that awaits real async work", async () => {
+    // THE LINE INSIDE `async`, measured rather than reasoned about (review of #1770).
+    //
+    // Both pages look identical in source — `async () => { await …; view.submit(…) }` — and they
+    // land on opposite sides, because what matters is WHEN the continuation is queued:
+    //
+    //   await Promise.resolve()  the continuation is queued while the listener is still on the
+    //                            stack, so it runs at the microtask checkpoint the dispatch takes
+    //                            after that listener. `eventPhase` has not reset. MARKED.
+    //   await <real async work>  the continuation is queued from a later task. The dispatch ended
+    //                            long before. NOT marked, and no wait makes it so.
+    //
+    // The second is the common shape (`await validate()` that actually does I/O), so it is the one
+    // the documentation must warn about — an author whose save silently does nothing in preview
+    // needs to be told this is the reason, not left to conclude the button is broken.
+    const wrote: string[] = [];
+    const run = await runPagesHeadless([page("micro", AWAITS_A_MICROTASK), page("real", AWAITS_REAL_WORK)], {
+      write: async (_cid, values) => {
+        wrote.push(values.name ?? "");
+        return { ok: true, token: `t${wrote.length}` };
+      },
+      undo: async () => ({ ok: true }),
+    });
+    if (!run.ok) throw new Error(run.problems.join(" "));
+    expect(wrote).toEqual(["after a microtask"]);
+    const micro = run.pages.find((pg) => pg.id === "micro");
+    expect(micro?.presses[0]?.writeWithheld).toBe(false);
+    expect(micro?.presses[0]?.write).toMatchObject({ ok: true });
+    // Submitted for real, and still not written. Both halves matter: the page is not broken, the
+    // cause simply cannot be established from a later task.
+    const real = run.pages.find((pg) => pg.id === "real");
+    expect(real?.presses[0]?.submitted).toEqual({ cid: "orders", fields: ["name"] });
+    expect(real?.presses[0]?.writeWithheld).toBe(true);
+    expect(real?.presses[0]?.write).toBeNull();
+  }, 240_000);
 
   it("writes for the pressed button and for NONE of the three pages that submit by themselves", async () => {
     // THE GATE, against four pages that each break a different guess somebody might make about
