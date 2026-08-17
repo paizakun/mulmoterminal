@@ -168,9 +168,9 @@ stop the others being scanned):
 **`datetime` is a wall clock, not an instant.** `YYYY-MM-DDTHH:MM`, seconds optional, **no timezone
 suffix**. `new Date(...).toISOString()` is the reflex and it is wrong twice: the `Z` is refused at
 publish, and the time SHIFTS into whatever timezone this machine is in — a Tokyo court's 08:00
-becomes `15:00Z` when the script runs in Seattle — `16:00Z` for the same 08:00 in winter, because the
-offset moves too. Had the format been accepted, the app would have
-published with every row seven hours out. Build the string from its parts
+becomes `15:00Z` when the script runs in Seattle, and `16:00Z` for the same 08:00 in winter, because
+the offset moves too. Had the format been accepted, the app would have published with every row
+seven hours out — eight, on the dates the other side of the change. Build the string from its parts
 (`` `${dateKey}T${hh}:00` ``). A `stampField`'s `…Z` (step "limited number of places") is the one
 `datetime` shaped that way, and the rules write it — no script does.
 
