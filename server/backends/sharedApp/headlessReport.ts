@@ -223,7 +223,7 @@ function pageLines(page: HeadlessPageReport): string[] {
     `${page.audience} page '${page.id}'`,
     ...(page.audience === "public" ? [] : [`  ${MEMBER_PAGE_LIMIT}`]),
     `  ${handshakeLine(page)}`,
-    ...unpromptedLine(page).map((line) => `  ${line}`),
+
     ...onLoadLine(page).map((line) => `  ${line}`),
     ...formLine(page).map((line) => `  ${line}`),
     page.text === "" ? "  Nothing was drawn: the page put no text on the screen at all." : `  On screen: ${quoted(page.text)}`,
