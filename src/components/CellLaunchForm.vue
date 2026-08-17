@@ -53,6 +53,10 @@ const props = defineProps<{
   choice: LaunchChoice | null;
   defaultCwd: string | null;
   presets: CwdPreset[];
+  // The saved directories could not be READ — /api/config failed and the retries gave up. The
+  // chip row is empty for a reason the user cannot otherwise see, so it says so instead of
+  // looking like a user who has opened nothing.
+  configUnavailable?: boolean | undefined;
   // Configured launch commands (shell/codex/…) offered next to Claude in this launcher.
   launchers?: Launcher[] | undefined;
   // Session ids open in other grid cells. Resuming one of them would detach that cell, so those
@@ -81,7 +85,9 @@ const emit = defineEmits<{
   (e: "resume", value: { id: string; cwd: string | null; agent?: TerminalAgent }): void;
   (e: "run", value: RunCommand): void;
   (e: "launch", value: LaunchPick): void;
-  (e: "close"): void;
+  // `retry-config`: read the config again after it could not be read at all — the button on the
+  // notice below. The shell owns the read; this only asks for another one.
+  (e: "close" | "retry-config"): void;
 }>();
 
 // An empty field means the server's workspace default — the placeholder is a hint, not a value.
@@ -599,6 +605,13 @@ async function requestRemove(repoDir: string | null, w: Worktree): Promise<void>
     >
       <span class="material-symbols-outlined" aria-hidden="true">close</span>
     </button>
+    <!-- Not a chip: a chip launches somewhere, and there is nowhere to launch here. It sits where
+       the chips would be because that is the emptiness it explains. -->
+    <p v-if="configUnavailable" data-testid="cell-config-unavailable" class="flex w-full items-center justify-center gap-1.5 text-[11px] opacity-70">
+      <span class="material-symbols-outlined text-[13px]" aria-hidden="true">cloud_off</span>
+      Couldn't reach the server, so your saved directories aren't listed.
+      <button type="button" class="underline underline-offset-2 hover:opacity-100" @click="emit('retry-config')">Try again</button>
+    </p>
     <div v-if="chips.length" class="flex w-full flex-wrap justify-center gap-1.5">
       <span
         v-for="p in chips"

@@ -538,6 +538,32 @@ describe("useAppConfig — loadConfig retries a request that failed", () => {
     expect(calls).toHaveLength(2);
   });
 
+  // Silence for half a minute and then silence forever is the same empty launcher this whole
+  // change exists to explain. When the retries give up, the shell gets something to render.
+  it("reports the config as unavailable only once the retries give up", async () => {
+    mockAttempts(DOWN);
+    const { loadConfig, configUnavailable } = useAppConfig();
+
+    await loadConfig();
+    expect(configUnavailable.value).toBe(false); // still trying — nothing to tell the user yet
+
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(configUnavailable.value).toBe(true);
+  });
+
+  it("takes the notice back when a later read succeeds", async () => {
+    mockAttempts(DOWN);
+    const { loadConfig, configUnavailable } = useAppConfig();
+    await loadConfig();
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(configUnavailable.value).toBe(true);
+
+    mockAttempts(UP({ cwdPresets: [{ label: "proj", path: "/p" }] }));
+    await loadConfig();
+
+    expect(configUnavailable.value).toBe(false);
+  });
+
   it("abandons the chain when the scope that started it goes away", async () => {
     const calls = mockAttempts(DOWN);
     const scope = effectScope();

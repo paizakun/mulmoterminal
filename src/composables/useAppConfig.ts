@@ -616,7 +616,7 @@ function createConfigReader({ defaultCwd, snapshotVersion, adoptServerPresets, m
  * answer of the other, since the module-level singletons have no version guard of their own.
  * (CodeRabbit on #1771 read the old wording here as claiming module-level state.)
  */
-function createConfigLoader(loadOnce: ConfigRead): () => Promise<void> {
+function createConfigLoader(loadOnce: ConfigRead, unavailable: Ref<boolean>): () => Promise<void> {
   // Which chain is the current one. A second `load()` — a remount, an HMR update — supersedes the
   // chain the previous one left running, so two of them never race to write the same refs.
   let generation = 0;
@@ -652,15 +652,21 @@ function createConfigLoader(loadOnce: ConfigRead): () => Promise<void> {
     if (!armed) return null; // superseded, or the caller is gone
     const answered = await trackConfigLoad(() => loadOnce(armed));
     if (inFlight?.signal === armed.signal) inFlight = null;
-    return armed.stale() ? null : answered;
+    if (armed.stale()) return null;
+    if (answered) unavailable.value = false;
+    return answered;
   }
 
   async function retry(mine: number): Promise<void> {
     for (let round = 0; ; round++) {
       const delay_ms = configRetryDelayMs(round);
-      // The server is down rather than restarting. Reloading the page is the user's move, and
-      // polling it for the life of the tab would not have made it answer.
-      if (delay_ms === null) return;
+      // The server is down rather than restarting. Say so — half a minute of silent retrying ends
+      // in the same empty launcher this whole change exists to explain, and the user is the only
+      // one left who can do anything about it (CodeRabbit on #1771).
+      if (delay_ms === null) {
+        unavailable.value = true;
+        return;
+      }
       await sleep(delay_ms);
       const answered = await attempt(mine);
       if (answered !== false) return; // answered, or this chain is no longer the current one
@@ -696,12 +702,17 @@ export function useAppConfig() {
 
   const { savePresets, recordPreset, removePreset, migrateLegacyRecents, snapshotVersion, adoptServerPresets } = createPresetManager(presets, saving, error);
 
-  const loadConfig = createConfigLoader(createConfigReader({ defaultCwd, snapshotVersion, adoptServerPresets, migrateLegacyRecents }));
+  // Whether the config could not be read at all, after the retries gave up — what the launcher
+  // shows instead of pretending the user has no saved directories. Per-call like `presets`, and
+  // filled in for the caller that loads.
+  const configUnavailable = ref(false);
+  const loadConfig = createConfigLoader(createConfigReader({ defaultCwd, snapshotVersion, adoptServerPresets, migrateLegacyRecents }), configUnavailable);
 
   return {
     defaultCwd,
     home,
     presets,
+    configUnavailable,
     prRepos,
     gitlabHosts,
     saveGitlabHosts,
