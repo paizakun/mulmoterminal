@@ -195,7 +195,12 @@ values are the wrong shape — a `datetime` that is an instant, a `date` that is
 `number` holding text — with `total` (every flagged row) and `rows` (the first ten, as
 `{ id, problem }`). Those rows are in the collection and publish will refuse them, so a `lint` block
 is the generator to fix and the batch to rewrite, now rather than after the other 719. No `lint`
-key at all is the clean answer.
+key at all is the clean answer, and `total` — not the length of `rows` — is how many there are.
+
+Rewriting them is the one place `mode: "create"` is the wrong mode: the rows exist, so `create`
+would refuse every one of them. Fix the generator, regenerate the SAME ids, and send them with the
+default `upsert` — the script produces the whole record, so replacing it whole is exactly right, and
+it is only safe here because these ids are the ones you just wrote in this same batch.
 
 `rejected` is the other half. It is not a count and not only about collisions: `putItems` returns
 `{ written, rejected }` with one `{ id, problem }` per refused row, and the `problem` is as likely
