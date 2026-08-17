@@ -88,6 +88,12 @@ function writeLines(write: HeadlessWrite): string[] {
 
 /** A confirmation this run chose not to accept. Its own line, because a null write and a declined
  *  one are opposite findings about a button, and silence here would read as the first. */
+/** A press on a page that submits by itself. The submission is real and so is the press; what is
+ *  unknowable is whether one caused the other, and a write is not something to do on a guess. */
+const WITHHELD_WRITE =
+  "    It was DECLINED rather than written, because this page submits WITHOUT being pressed (see above). A submission arriving during a press cannot be told from one " +
+  "the press caused, so writing here would put a real record in the app on behalf of a control that may have done nothing.";
+
 const SKIPPED_WRITE =
   "    It was DECLINED rather than written: this run had already spent its budget of real writes. The submission is wired; what the rules would say about THIS one was not asked.";
 
@@ -113,6 +119,20 @@ function handshakeLine(page: HeadlessPageReport): string {
  *  Two things at once, and both are worth a line: a visitor opening this page is shown a
  *  confirmation they never asked for, and every press reported below had to be measured from AFTER
  *  this — without that, one automatic submission makes every button on the page look wired. */
+/** The page submits with nobody pressing anything — which decides whether this run wrote here.
+ *
+ *  Stated with its LIMIT, because the measurement is a window and not a proof: a page whose timer
+ *  is slower than it looks quiet, and a reader who takes this for a guarantee would trust an
+ *  attribution nothing established. */
+function unpromptedLine(page: HeadlessPageReport): string[] {
+  if (!page.submitsUnprompted) return [];
+  return [
+    `This page SUBMITS WITHOUT BEING PRESSED, so nothing on it was accepted: a submission that arrives during a press cannot be told from one the press caused, and a ` +
+      `write on a guess is a real record in a real app. (It was watched doing nothing for ${LIMITS.unpromptedMs}ms — a page that waits longer than that before ` +
+      `submitting would look quiet here.)`,
+  ];
+}
+
 function onLoadLine(page: HeadlessPageReport): string[] {
   if (page.submittedOnLoad === 0) return [];
   const times = page.submittedOnLoad === 1 ? "once" : `${page.submittedOnLoad} times`;
@@ -160,6 +180,7 @@ function pressNotes(press: HeadlessPress, audience: PreviewAudience): string[] {
  *  the run chose not to ask, or there was no writer at all. */
 function outcomeLines(press: HeadlessPress): string[] {
   if (press.write !== null) return writeLines(press.write);
+  if (press.writeWithheld) return [WITHHELD_WRITE];
   if (press.writeSkipped) return [SKIPPED_WRITE];
   // WITHOUT saying why. The reason belongs to the run, not to this press — the closing lines say
   // whether the run had a writer at all — and a press-level guess would contradict them on the
@@ -202,6 +223,7 @@ function pageLines(page: HeadlessPageReport): string[] {
     `${page.audience} page '${page.id}'`,
     ...(page.audience === "public" ? [] : [`  ${MEMBER_PAGE_LIMIT}`]),
     `  ${handshakeLine(page)}`,
+    ...unpromptedLine(page).map((line) => `  ${line}`),
     ...onLoadLine(page).map((line) => `  ${line}`),
     ...formLine(page).map((line) => `  ${line}`),
     page.text === "" ? "  Nothing was drawn: the page put no text on the screen at all." : `  On screen: ${quoted(page.text)}`,
@@ -246,21 +268,35 @@ function whatWasWritten(pages: readonly HeadlessPageReport[]): string[] {
   const made = writes.filter((write) => write.ok);
   const refused = writes.length - made.length;
   if (writes.length === 0) return ["No confirmation was accepted: nothing on these pages submitted, so nothing was written."];
-  const wrote =
-    made.length === 0
-      ? []
-      : [
-          `${made.length} submission${made.length === 1 ? " was" : "s were"} ACCEPTED and written to the real database as you, then removed again immediately. ` +
-            "Any record this run could not remove is named on the press that made it — there are no others.",
-        ];
-  const denied =
-    refused === 0
-      ? []
-      : [
-          `${refused} submission${refused === 1 ? " was" : "s were"} attempted and NOT written — the press that made each one says who refused it and what that means.`,
-        ];
-  return [...wrote, ...denied];
+  const left = made.filter((write) => write.cleanup !== "removed").length;
+  return [...removedLine(made.length - left), ...standingLine(left, made.length), ...refusedSummary(refused)];
 }
+
+const removedLine = (removed: number): string[] =>
+  removed === 0
+    ? []
+    : [`${removed} submission${removed === 1 ? " was" : "s were"} ACCEPTED and written to the real database as you, then removed again immediately.`];
+
+/** The half that costs somebody else something.
+ *
+ *  Counted APART from the removals, which is the whole point: rolled together, this close said
+ *  every accepted write had been removed while a press above was naming one that is still standing.
+ *  The close is the part a reader trusts, so it is the worse of the two places to be wrong. */
+function standingLine(left: number, made: number): string[] {
+  if (left === 0) return made === 0 ? [] : ["Nothing this run wrote was left behind."];
+  const it = left === 1 ? "it" : "them";
+  return [
+    `${left} accepted record${left === 1 ? " is" : "s are"} STILL THERE — this run wrote ${it} and could not take ${it} back. ` +
+      `The press that made each one names it. Remove ${it} by hand before publishing.`,
+  ];
+}
+
+const refusedSummary = (refused: number): string[] =>
+  refused === 0
+    ? []
+    : [
+        `${refused} submission${refused === 1 ? " was" : "s were"} attempted and NOT written — the press that made each one says who refused it and what that means.`,
+      ];
 
 function closing(run: { wrote: boolean; writesSkipped: number; screenshotDir: string | null; pages: readonly HeadlessPageReport[] }): string[] {
   const skipped =

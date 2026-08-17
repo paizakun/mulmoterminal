@@ -134,6 +134,20 @@ const RESUBMITS_ON_DECLINE = `
   view.submit("orders", { name: "nobody asked" }).then(again, again);
 </script>`;
 
+/** A page whose button does nothing and which submits from a TIMER, long after it loaded.
+ *
+ *  Nothing is pending when the press happens and nothing was pending at the mount, so every
+ *  counting-based defence sees a submission appear "because of" the click. It did not. This is the
+ *  page that decides whether the run writes on a guess. */
+const SUBMITS_ON_A_TIMER = `
+<button type="button" id="go">Order</button>
+<script>
+  const view = window.__MC_APP_VIEW;
+  view.onState(() => {});
+  view.ready();
+  setTimeout(() => { view.submit("orders", { name: "a timer did this" }); }, 800);
+</script>`;
+
 /** A page that rearranges its own controls when an input is filled.
  *
  *  Ordinary reactive behaviour, and it moves the ground under a survey taken before the filling:
@@ -530,6 +544,26 @@ describe.skipIf(!chromeReady)("a headless run, in a real browser", () => {
     // ...and NOTHING was written. This is the assertion: a write here is a record in a real app,
     // made on behalf of a control nobody can blame.
     expect(wrote).toEqual([]);
+  }, 120_000);
+
+  it("writes nothing on a page that submits from a timer, however the counts line up", async () => {
+    // The general case, and the one no amount of before/after counting solves: a submission can
+    // arrive during a press for reasons that have nothing to do with it, and the parent cannot tell
+    // the two apart. So the page is watched doing nothing first, and a page that submits while
+    // nobody is pressing gets no writes at all — the destructive reading is the one to refuse when
+    // cause is unknowable.
+    const wrote: string[] = [];
+    const run = await runPagesHeadless([page("timer", SUBMITS_ON_A_TIMER)], {
+      write: async (_cid, values) => {
+        wrote.push(values.name ?? "");
+        return { ok: true, token: `t${wrote.length}` };
+      },
+      undo: async () => ({ ok: true }),
+    });
+    if (!run.ok) throw new Error(run.problems.join(" "));
+    expect(run.pages[0]?.submitsUnprompted).toBe(true);
+    expect(wrote).toEqual([]);
+    expect(run.pages[0]?.presses[0]?.writeWithheld).toBe(true);
   }, 120_000);
 
   it("does not abandon a write that outlasts the browser deadline", async () => {

@@ -138,6 +138,11 @@ export interface HeadlessPress {
   /** What the parent refused before drawing a confirmation. Invisible in a browser: it is answered
    *  on the port, into a promise the page usually does not await. */
   refused: string[];
+  /** This run refused to write for this press, because the page submits without being pressed.
+   *
+   *  Its own flag, and not `writeSkipped`: one is a budget this run spent, the other is a page
+   *  whose submissions cannot honestly be attributed to anything. */
+  writeWithheld: boolean;
   /** The browser reported a form submission the sandbox blocked. The page cannot see this happen —
    *  the `submit` event never fires, so `preventDefault()` never runs — and neither can the author,
    *  unless they have the console open. */
@@ -168,6 +173,17 @@ export interface HeadlessPageReport {
    *  too, which is a tool call that never comes back and, because shared-app operations are
    *  serialised per repository, everything queued behind it. */
   unresponsive: boolean;
+  /** The page submits WITHOUT being pressed — on load, or from a timer while nothing was happening.
+   *
+   *  Measured by watching it do nothing for `unpromptedMs` after the mount, and it decides whether
+   *  this run will write on this page at all. It will not: a submission that arrives during a press
+   *  cannot be told from one the press caused, and the difference decides whether a real record is
+   *  made in a real app for a control nobody can blame. Counting is not proof of cause, so where
+   *  cause is unknowable the destructive reading is the one to refuse.
+   *
+   *  It is a BOUND, not a proof: a page whose timer is slower than the window looks quiet. The
+   *  report says so rather than implying the question was settled. */
+  submitsUnprompted: boolean;
   /** Submissions the page made BEFORE anything was pressed — on load, from `onState`, from a
    *  timer. Its own number because it is two findings at once: a visitor is shown a confirmation
    *  they never asked for, and every press below would otherwise inherit it. */
@@ -227,6 +243,10 @@ export type HeadlessRun =
  *  forty renders to say the same thing. What is dropped is REPORTED (see `narrate`), because a
  *  silent cap reads as "everything was covered".
  *
+ *  `unpromptedMs` is how long a page is watched doing nothing before this run is willing to write
+ *  at all. It is a bound on an unanswerable question — see `submitsUnprompted` — and the report
+ *  states it, because a page whose timer is slower than this is a page this run will misattribute.
+ *
  *  `writes` is the one that costs somebody ELSE. Every accepted confirmation is a real record in
  *  the live database, removed again immediately — but removed by a best effort, and six pages of
  *  six controls would be up to thirty-six of them. Four is enough to learn what the rules say,
@@ -236,7 +256,7 @@ export type HeadlessRun =
  *  and a page that will answer does so in a few milliseconds — the handshake is two messages
  *  between a frame and its own parent. So it is short: it is paid once per mount by exactly the
  *  pages that are broken, and every mount of them. */
-export const LIMITS = { pages: 6, presses: 6, writes: 4, evaluateMs: 5000, readyMs: 2000, settleMs: 600, textChars: 400 } as const;
+export const LIMITS = { pages: 6, presses: 6, writes: 4, evaluateMs: 5000, readyMs: 2000, settleMs: 600, unpromptedMs: 1500, textChars: 400 } as const;
 
 /** The clickable things, in document order. `input[type=submit]` is in the list although the
  *  sandbox will never let one submit — that IS the finding, and a scan that skipped them would
@@ -710,7 +730,80 @@ async function acceptOne(driver: Driver, writer: PreviewWriter, pending: { cid: 
   return { cid: pending.cid, ok: true, error: "", reason: "rules", cleanup: "left", cleanupError: undone.error ?? "the record could not be removed" };
 }
 
-async function pressOne(driver: Driver, input: HeadlessPageInput, index: number, budget: WriteBudget): Promise<PressResult | null> {
+/** The state this press is measured from, with anything left over from the mount answered first.
+ *
+ *  ANYTHING ALREADY PENDING IS ANSWERED, so the control under test is actually exercised. A page
+ *  that submits on load leaves a confirmation open across the mount, and the parent refuses a second
+ *  one while it is (`busy`) — so without this, every button on such a page is answered by the
+ *  bridge rather than by the page, and reported as having reached nothing.
+ *
+ *  AND THE GROUND IS RE-READ AFTERWARDS, which is the part that is easy to leave out. Declining
+ *  SETTLES the page's own `submit()` promise, and a page is entitled to submit again from that
+ *  promise's `false` branch — a "that didn't work, try once more" that costs nothing to write. That
+ *  resubmission lands before the click, so a reading captured above it counts as this control's
+ *  work: a real record written for a control nobody pressed, reported against a button that is
+ *  inert. Read after the page has had its turn, the resubmission is already counted here and the
+ *  press is measured from the truth.
+ *
+ *  The extra wait is paid ONLY by a page that had something pending. An ordinary page observes once
+ *  and goes straight to the click. */
+async function clearedGround(driver: Driver): Promise<HarnessObservation> {
+  const seen = await driver.observe();
+  if (seen.pending === null) return seen;
+  await driver.decline();
+  await new Promise((resolve) => setTimeout(resolve, LIMITS.settleMs));
+  return driver.observe();
+}
+
+/** Answer the confirmation this press raised, if it raised one and this run may write for it.
+ *
+ *  Split out of `pressOne` for the line budget, and it reads as the decision it is. Returns what the
+ *  database said, plus WHY nothing was written when nothing was — the three reasons are opposite
+ *  findings about the button and the report says them apart. */
+async function answerPress(
+  driver: Driver,
+  budget: WriteBudget,
+  request: { submitted: { cid: string; fields: string[] } | null; pending: { cid: string; values: Record<string, string> } | null; withhold: boolean },
+): Promise<{ write: HeadlessWrite | null; skipped: boolean; withheld: boolean }> {
+  // ACCEPT WHEN THERE IS SOMETHING TO ACCEPT AND SOMETHING LEFT TO SPEND, otherwise answer the way
+  // somebody who changed their mind would, so the page's own "cancelled" path runs and nothing is
+  // left waiting on a promise that never settles.
+  // THE CONFIRMATION THIS PRESS MADE, and never one that was already open.
+  //
+  // `pending` is one cell holding whatever is currently unanswered, so reading it alone would
+  // accept a confirmation the page raised at LOAD and attribute the write to a button that did
+  // nothing — a real record, made and removed, for an inert control, and absent from that press's
+  // account of itself because `submitted` is correctly null. What tells them apart is the COUNT:
+  // the cell can only be set while nothing is open, so it grows exactly once per new confirmation.
+  //
+  // AND NOT ON A PAGE THAT SUBMITS BY ITSELF. A count that grew is not proof the CLICK grew it: a
+  // page can schedule a submission for any moment, including this window, and nothing on the
+  // parent's side can tell that one from the one a press caused. Where cause is unknowable, the
+  // reading that writes to a real database is the one to refuse — see `submitsUnprompted`.
+  const pending = request.submitted === null || request.withhold ? null : request.pending;
+  // Null unless there is BOTH something to accept and a way to accept it, which collapses the two
+  // questions into the one narrowing everything below needs.
+  const writer = pending === null ? null : budget.writer;
+  let write: HeadlessWrite | null = null;
+  if (writer !== null && pending !== null) {
+    if (budget.left > 0) {
+      budget.left -= 1;
+      write = await acceptOne(driver, writer, pending);
+    } else {
+      budget.skipped += 1;
+    }
+  }
+  // A press that raised no confirmation is declined too: `decline()` on a bridge with nothing
+  // pending is a no-op, and asking first would be a second round trip to learn what `after` says.
+  if (write === null) await driver.decline();
+  return {
+    write,
+    skipped: writer !== null && pending !== null && write === null,
+    withheld: request.withhold && request.submitted !== null && budget.writer !== null,
+  };
+}
+
+async function pressOne(driver: Driver, input: HeadlessPageInput, index: number, budget: WriteBudget, withhold: boolean): Promise<PressResult | null> {
   await driver.mount(input);
   const frame = driver.frame();
   if (frame === null) return null;
@@ -736,6 +829,7 @@ async function pressOne(driver: Driver, input: HeadlessPageInput, index: number,
       blockedFormSubmission: false,
       write: null,
       writeSkipped: false,
+      writeWithheld: false,
       notices: [],
       errors: [...new Set(driver.askFailures())],
     };
@@ -755,27 +849,7 @@ async function pressOne(driver: Driver, input: HeadlessPageInput, index: number,
   // opening script, from `onState`, from a timer. Read without this, that submission is reported
   // as the work of whichever control happened to be under test — and since every press gets a
   // fresh mount, EVERY button on such a page looks correctly wired when none of them is.
-  // ANYTHING ALREADY PENDING IS ANSWERED FIRST, so the control under test is actually exercised.
-  // A page that submits on load leaves a confirmation open across the mount, and the parent refuses
-  // a second one while it is (`busy`) — so without this, every button on such a page is answered by
-  // the bridge rather than by the page, and reported as having reached nothing.
-  //
-  // AND THE GROUND IS RE-READ AFTERWARDS, which is the part that is easy to leave out. Declining
-  // SETTLES the page's own `submit()` promise, and a page is entitled to submit again from that
-  // promise's `false` branch — a "that didn't work, try once more" that costs nothing to write.
-  // That resubmission lands before the click, so a `before` captured above it counts as this
-  // control's work: a real record written for a control nobody pressed, reported against a button
-  // that is inert. Read after the page has had its turn, it is already in `before` and the press
-  // is measured from the truth.
-  //
-  // The extra wait is paid ONLY by a page that had something pending. An ordinary page observes
-  // once and goes straight to the click.
-  let before = await driver.observe();
-  if (before.pending !== null) {
-    await driver.decline();
-    await new Promise((resolve) => setTimeout(resolve, LIMITS.settleMs));
-    before = await driver.observe();
-  }
+  const before = await clearedGround(driver);
   const noiseBefore = driver.noise().length;
 
   // THROUGH THE BROWSER, at the control's coordinates, so the event lands where a person's would.
@@ -789,35 +863,10 @@ async function pressOne(driver: Driver, input: HeadlessPageInput, index: number,
   await new Promise((resolve) => setTimeout(resolve, LIMITS.settleMs));
   const after = await driver.observe();
   const submitted = after.submitted[before.submitted.length] ?? null;
-  // ACCEPT WHEN THERE IS SOMETHING TO ACCEPT AND SOMETHING LEFT TO SPEND, otherwise answer the way
-  // somebody who changed their mind would, so the page's own "cancelled" path runs and nothing is
-  // left waiting on a promise that never settles.
-  // THE CONFIRMATION THIS PRESS MADE, and never one that was already open.
-  //
-  // `pending` is one cell holding whatever is currently unanswered, so reading it alone would
-  // accept a confirmation the page raised at LOAD and attribute the write to a button that did
-  // nothing — a real record, made and removed, for an inert control, and absent from that press's
-  // account of itself because `submitted` is correctly null. What tells them apart is the COUNT:
-  // the cell can only be set while nothing is open, so it grows exactly once per new confirmation.
-  const pending = submitted === null ? null : after.pending;
-  // Null unless there is BOTH something to accept and a way to accept it, which collapses the two
-  // questions into the one narrowing everything below needs.
-  const writer = pending === null ? null : budget.writer;
-  let write: HeadlessWrite | null = null;
-  if (writer !== null && pending !== null) {
-    if (budget.left > 0) {
-      budget.left -= 1;
-      write = await acceptOne(driver, writer, pending);
-    } else {
-      budget.skipped += 1;
-    }
-  }
-  // A press that raised no confirmation is declined too: `decline()` on a bridge with nothing
-  // pending is a no-op, and asking first would be a second round trip to learn what `after` says.
-  if (write === null) await driver.decline();
+  const answered = await answerPress(driver, budget, { submitted, pending: after.pending, withhold });
   // Read AFTER the accept: the write is where a page's own error handler runs, and a notice raised
   // there is the most useful one on the page.
-  const finished = write === null ? after : await driver.observe();
+  const finished = answered.write === null ? after : await driver.observe();
   const noise = driver.noise().slice(noiseBefore);
   const press: HeadlessPress = {
     label,
@@ -825,10 +874,11 @@ async function pressOne(driver: Driver, input: HeadlessPageInput, index: number,
     submitted,
     refused: finished.refused.slice(before.refused.length),
     blockedFormSubmission: noise.some((line) => line.includes(BLOCKED_FORM)),
-    write,
-    // True only where the budget was the reason: a null writer or an unanswered press reaches here
-    // with `writer === null`, and those are not a choice this run made.
-    writeSkipped: writer !== null && pending !== null && write === null,
+    write: answered.write,
+    // `skipped` is true only where the BUDGET was the reason: a null writer or an unanswered press
+    // is not a choice this run made, and `withheld` is a different choice again.
+    writeSkipped: answered.skipped,
+    writeWithheld: answered.withheld,
     notices: finished.notices.slice(before.notices.length),
     // The page's own words from the press window, PLUS every question of ours this mount broke —
     // `FILL_INPUTS` and `LABELS` are put before the window opens, so their failures are not in the
@@ -847,6 +897,10 @@ async function reportPage(driver: Driver, input: HeadlessPageInput, budget: Writ
   // because a picture taken after a press would be of whichever control happened to be last, which
   // represents nothing.
   const screenshotError = shot === null ? "" : await driver.screenshot(shot);
+  // WATCH IT DO NOTHING, once per page, before deciding whether this run may write here at all.
+  // The picture above is taken inside the same wait, so the window costs what it costs and no more.
+  await new Promise((resolve) => setTimeout(resolve, LIMITS.unpromptedMs));
+  const submitsUnprompted = (await driver.observe()).submitted.length > 0;
   const liveForms = frame === null ? 0 : asNumber(await driver.evaluate(`document.querySelectorAll("form").length`, frame));
   const text =
     frame === null ? "" : asString(await driver.evaluate(`(document.body.innerText || "").replace(/\\s+/g, " ").trim().slice(0, ${LIMITS.textChars})`, frame));
@@ -876,7 +930,7 @@ async function reportPage(driver: Driver, input: HeadlessPageInput, budget: Writ
   const presses: HeadlessPress[] = [];
   let controls = labels.length;
   for (let index = 0; index < Math.min(controls, LIMITS.presses); index += 1) {
-    const result = await pressOne(driver, input, index, budget);
+    const result = await pressOne(driver, input, index, budget, submitsUnprompted);
     unresponsive = unresponsive || driver.stalled();
     if (result === null) break;
     presses.push(result.press);
@@ -888,6 +942,7 @@ async function reportPage(driver: Driver, input: HeadlessPageInput, budget: Writ
     readied: observed.readied,
     stateDelivered: observed.stateDelivered,
     unresponsive,
+    submitsUnprompted,
     submittedOnLoad: observed.submitted.length,
     liveForms,
     text,

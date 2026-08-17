@@ -20,6 +20,7 @@ const press = (over: Partial<HeadlessPress> = {}): HeadlessPress => ({
   blockedFormSubmission: false,
   write: null,
   writeSkipped: false,
+  writeWithheld: false,
   notices: [],
   errors: [],
   ...over,
@@ -31,6 +32,7 @@ const page = (over: Partial<HeadlessPageReport> = {}): HeadlessPageReport => ({
   readied: true,
   stateDelivered: true,
   unresponsive: false,
+  submitsUnprompted: false,
   submittedOnLoad: 0,
   liveForms: 0,
   text: "Curry, Ramen",
@@ -97,6 +99,36 @@ describe("narrateHeadlessRun", () => {
     expect(clean).toContain("does NOT prove the app is ready to publish");
     expect(clean).toContain("other people's devices");
     expect(clean).toContain("two people submitting at once");
+  });
+
+  it("says a page that submits by itself was not written to, and why", () => {
+    // A count that grew is not proof the CLICK grew it. Where cause is unknowable the destructive
+    // reading is the one to refuse — and the reader has to be told that is what happened, or an
+    // untested page reads as a tested one.
+    const said = narrate({ submitsUnprompted: true, presses: [press({ submitted: { cid: "orders", fields: [] }, writeWithheld: true })] });
+    expect(said).toContain("SUBMITS WITHOUT BEING PRESSED");
+    expect(said).toContain("cannot be told from one the press caused");
+    // And the LIMIT of the measurement, so nobody reads it as a proof.
+    expect(said).toContain("would look quiet here");
+  });
+
+  it("does not say a record was removed when one is still standing", () => {
+    // The close is the part a reader trusts, so it is the worse of the two places to be wrong: a
+    // press above was naming a record that could not be taken back while this line said every
+    // accepted write had been removed.
+    const said = narrate({
+      presses: [
+        press({ submitted: { cid: "orders", fields: [] }, write: written() }),
+        press({
+          label: "Again",
+          submitted: { cid: "orders", fields: [] },
+          write: { cid: "orders", ok: true, error: "", reason: "rules", cleanup: "left", cleanupError: "not-this-session" },
+        }),
+      ],
+    });
+    expect(said).toContain("1 submission was ACCEPTED and written");
+    expect(said).toContain("1 accepted record is STILL THERE");
+    expect(said).toContain("Remove it by hand before publishing");
   });
 
   it("does not claim a write happened when every submission was refused", () => {
@@ -230,7 +262,10 @@ describe("narrateHeadlessRun", () => {
     });
     expect(said).toContain("could NOT be removed (not-this-session)");
     expect(said).toContain("Take it out by hand before publishing");
-    expect(said).toContain("Any record this run could not remove is named");
+    // The close now names the count rather than promising in general that leftovers are named:
+    // that promise sat beside a claim that everything had been removed, which is the pair this
+    // report must never make.
+    expect(said).toContain("1 accepted record is STILL THERE");
   });
 
   it("tells a confirmation the run declined from one the page never made", () => {
