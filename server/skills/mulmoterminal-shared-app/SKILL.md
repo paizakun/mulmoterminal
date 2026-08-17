@@ -153,13 +153,17 @@ trip.
 
 **That proof needs a session.** `check` answers offline, and offline it does NOT read the records —
 it says so in as many words ("the live records were NOT scanned"). A `check` that has not scanned
-them proves nothing about the batch you just wrote, so connect first, and read the line. It says one
-of four things, and only ONE of them is a proof: the scan ran and found nothing. The others are not
-degrees of the same answer — rows that do not fit are a MIGRATION (they are named), a collection
-reported UNKNOWN could not be read at all (that is access, and nothing is known about the rows
-behind it), and a scan that did not run says whether it was the session or an `app.json` that does
-not parse. Generate the rest only after a scan that ran and came back clean; anything else is
-repaired first.
+them proves nothing about the batch you just wrote, so connect first, and read what it says about the
+records. Exactly one answer is a proof: the scan RAN, over every collection, and found nothing.
+Everything else is repaired first, and the rest are not degrees of that one — they are different
+repairs, and more than one can be reported at once (a collection that could not be read does not
+stop the others being scanned):
+
+- **rows that do not fit** — named, and a MIGRATION. `confirm` at publish is the decision to break
+  them for everybody, not a way past this.
+- **UNKNOWN** — a collection could not be READ, so nothing at all is known about the rows behind it.
+  That is access, not data.
+- **not scanned** — the line says which: no session, or an `app.json` that does not parse.
 
 **`datetime` is a wall clock, not an instant.** `YYYY-MM-DDTHH:MM`, seconds optional, **no timezone
 suffix**. `new Date(...).toISOString()` is the reflex and it is wrong twice: the `Z` is refused at
