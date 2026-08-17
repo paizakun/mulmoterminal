@@ -58,6 +58,18 @@ export interface PreviewWriteFailure {
    *  "Missing or insufficient permissions", which tells an author nothing about which of their
    *  declarations it was. */
   error: string;
+  /** WHOSE refusal this was.
+   *
+   *  Because most of the failures on this path never reach the database at all — no session, a
+   *  projection that will not build, a cid nothing declares, a required field the page did not
+   *  send — and a caller reporting all of them as "the deployed rules said no" sends the author to
+   *  change a declaration the rules never saw. `taken` is its own answer for the same reason and a
+   *  sharper one: under `idFrom: "auth.uid"` it means the AUTHOR already has a record here, which
+   *  says nothing about a visitor, who has a different uid and would be accepted.
+   *
+   *  The pane does not read it — its reader is a person watching their own screen, who has the
+   *  context this field carries. The headless run's reader is an agent that does not. */
+  reason: "rules" | "taken" | "host";
 }
 
 export type PreviewWriteResult = PreviewWriteSuccess | PreviewWriteFailure;
@@ -178,14 +190,14 @@ const undoable = new Map<string, { root: string; written: PreviewWrittenRecord }
  *  made on the far side of an untrusted boundary is a courtesy, not a gate. */
 export async function writePreviewSubmission(root: string, cid: string, values: Record<string, string>): Promise<PreviewWriteResult> {
   const context = await sharedAppContext(root);
-  if (!context.ok) return { ok: false, error: context.problems.join(" ") };
+  if (!context.ok) return { ok: false, reason: "host", error: context.problems.join(" ") };
   const { handle } = context;
 
   const preview = await previewSharedApp(root);
-  if (!preview.ok) return { ok: false, error: preview.problems.join(" ") };
+  if (!preview.ok) return { ok: false, reason: "host", error: preview.problems.join(" ") };
 
   const spec = specFor(preview.config, preview.form, cid);
-  if (spec === null) return { ok: false, error: "unknown-collection" };
+  if (spec === null) return { ok: false, reason: "host", error: "unknown-collection" };
   // `needsAccount` is not asked. A handle exists only when the session has a VERIFIED address —
   // `setFirestoreAccessor` returns null otherwise (`sharedCollections.ts`) — so by the time
   // `sharedAppContext` has answered, the author is signed in. The check belongs to a host whose
@@ -193,7 +205,7 @@ export async function writePreviewSubmission(root: string, cid: string, values: 
 
   const fields = writableFields(spec.drawn, spec.submit.createFields, spec.submit.emailField);
   const missing = missingRequired(fields, values);
-  if (missing.length > 0) return { ok: false, error: `missing: ${missing.join(" / ")}` };
+  if (missing.length > 0) return { ok: false, reason: "host", error: `missing: ${missing.join(" / ")}` };
 
   // `serverTimestamp` is what this host can offer where the rules require GOOGLE's clock. The
   // shared decision holds no Firestore, so the sentinel comes from the SDK this host resolved —
@@ -201,14 +213,14 @@ export async function writePreviewSubmission(root: string, cid: string, values: 
   // declaration's answer rather than this module's.
   const record = recordOf(fields, spec.drawn, spec.submit, values, { uid: handle.uid, email: handle.email }, serverTimestamp);
   const id = recordId(spec.submit, handle.uid, record, randomUUID());
-  if (id === "") return { ok: false, error: "no-id" };
+  if (id === "") return { ok: false, reason: "host", error: "no-id" };
 
   const plan = plannedWrite(cid, spec.submit, id, record);
   const failed = await commit(handle, preview.aid, plan);
   if (failed !== null) {
     const raw = preview.config.submit?.[cid];
     const why = isRecord(raw) ? await explainRefusal(handle, preview.aid, raw, record) : null;
-    return { ok: false, error: why === null ? failed : `${why} (${failed})` };
+    return { ok: false, reason: failed === "already-taken" ? "taken" : "rules", error: why === null ? failed : `${why} (${failed})` };
   }
   const written: PreviewWrittenRecord = {
     cid: plan.cid,
@@ -230,11 +242,11 @@ export async function undoPreviewSubmission(token: string): Promise<PreviewWrite
   // The token names the record AND the app it was written in. Nothing from the request reaches the
   // delete — that is the whole of the protection, and it is why this lookup comes first.
   const entry = undoable.get(token);
-  if (entry === undefined) return { ok: false, error: "not-this-session" };
+  if (entry === undefined) return { ok: false, reason: "host", error: "not-this-session" };
   const { root, written } = entry;
 
   const context = await sharedAppContext(root);
-  if (!context.ok) return { ok: false, error: context.problems.join(" ") };
+  if (!context.ok) return { ok: false, reason: "host", error: context.problems.join(" ") };
   const { handle, authored } = context;
   const aid = authored.aid;
   try {
@@ -250,7 +262,7 @@ export async function undoPreviewSubmission(token: string): Promise<PreviewWrite
   } catch (err) {
     // KEPT on failure. The record is still there, so the author must still be able to try again —
     // and the list on screen is the only place it is known to be a test.
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    return { ok: false, reason: "host", error: err instanceof Error ? err.message : String(err) };
   }
   // Spent. One token, one delete: a second use could only name a record this preview no longer
   // wrote, which is the thing the token exists to make impossible.

@@ -313,7 +313,7 @@ describe.skipIf(!chromeReady)("a headless run, in a real browser", () => {
     // Removed, and removed with the token that write handed back.
     expect(undone).toEqual(["t1"]);
     expect(run.wrote).toBe(true);
-    expect(run.pages[0]?.presses[0]?.write).toEqual({ cid: "orders", ok: true, error: "", cleanup: "removed", cleanupError: "" });
+    expect(run.pages[0]?.presses[0]?.write).toEqual({ cid: "orders", ok: true, error: "", reason: "rules", cleanup: "removed", cleanupError: "" });
   }, 120_000);
 
   it("carries the rules' refusal back, and does not try to undo what was never written", async () => {
@@ -333,6 +333,7 @@ describe.skipIf(!chromeReady)("a headless run, in a real browser", () => {
       cid: "orders",
       ok: false,
       error: "the window for slots/1 opens at 2027-01-01T00:00:00.000Z",
+      reason: "rules",
       cleanup: "not-written",
       cleanupError: "",
     });
@@ -405,6 +406,91 @@ describe.skipIf(!chromeReady)("a headless run, in a real browser", () => {
     // ...and NOT swept, for exactly that reason: the report already says it is standing.
     expect(undone).toEqual([]);
   }, 120_000);
+
+  it("gives the authored page no way to reach the writer", async () => {
+    // THE HOLE `exposeFunction` OPENED. Puppeteer installs a binding in every document of the page,
+    // the sandboxed `srcdoc` included — so the one document here that nobody trusts could have
+    // called the writer directly, once per line of script, past the budget, the ledger and the undo.
+    // The verdict is passed IN now, and this is what pins that: the page asks, and there is nothing
+    // there. A regression would be silent otherwise, because the harness's own path still works.
+    const calls: string[] = [];
+    const run = await runPagesHeadless(
+      [
+        page(
+          "greedy",
+          `
+<div id="menu">loading…</div>
+<button type="button" id="go">Order</button>
+<script>
+  const view = window.__MC_APP_VIEW;
+  view.onState((collections) => {
+    document.getElementById("menu").textContent = (collections.menu || []).map((row) => row.title).join(", ");
+  });
+  document.getElementById("go").addEventListener("click", () => {
+    // What an untrusted page would try if the binding were there.
+    if (typeof window.__previewWrite === "function") window.__previewWrite("orders", { name: "stolen" });
+    view.submit("orders", { name: "x" });
+  });
+  view.ready();
+</script>`,
+        ),
+      ],
+      {
+        write: async (_cid, values) => {
+          calls.push(values.name ?? "");
+          return { ok: true, token: `t${calls.length}` };
+        },
+        undo: async () => ({ ok: true }),
+      },
+    );
+    if (!run.ok) throw new Error(run.problems.join(" "));
+    // Exactly one write, and it came through the parent — never the page's own call.
+    expect(calls).toEqual(["x"]);
+  }, 120_000);
+
+  it("hands the page the database's real answer, so its own failure path runs", async () => {
+    // The reason to ACCEPT rather than decline: the page's post-submit branch is code an author
+    // wrote and nobody has run. Declining exercises the cancelled path; accepting with a fake
+    // success exercises a path the visitor will never take.
+    const run = await runPagesHeadless([page("works", WORKS)], {
+      write: async () => ({ ok: false, error: "the window for slots/1 is closed", reason: "rules" as const }),
+      undo: async () => ({ ok: true }),
+    });
+    if (!run.ok) throw new Error(run.problems.join(" "));
+    expect(run.pages[0]?.presses[0]?.write).toMatchObject({ ok: false, reason: "rules" });
+  }, 120_000);
+
+  it("keeps the author's own id collision apart from a rules refusal", async () => {
+    // `already-taken` under `idFrom: "auth.uid"` is the AUTHOR's record, and says nothing about a
+    // visitor. Carried through as its own reason so the report can say which it was.
+    const run = await runPagesHeadless([page("works", WORKS)], {
+      write: async () => ({ ok: false, error: "already-taken", reason: "taken" as const }),
+      undo: async () => ({ ok: true }),
+    });
+    if (!run.ok) throw new Error(run.problems.join(" "));
+    expect(run.pages[0]?.presses[0]?.write).toMatchObject({ ok: false, reason: "taken" });
+  }, 120_000);
+
+  it("does not abandon a write that outlasts the browser deadline", async () => {
+    // THE OTHER HALF of the same fix. Every question put to the browser is bounded by
+    // `evaluateMs`; a write made on the far side of that bound would be abandoned by the run while
+    // the database went on to accept it — a real record nothing reports and nothing removes. The
+    // write happens in Node now and is awaited there, so a slow one is simply slow.
+    const undone: string[] = [];
+    const run = await runPagesHeadless([page("works", WORKS)], {
+      write: async () => {
+        await new Promise((resolve) => setTimeout(resolve, LIMITS.evaluateMs + 1500));
+        return { ok: true, token: "slow" };
+      },
+      undo: async (token) => {
+        undone.push(token);
+        return { ok: true };
+      },
+    });
+    if (!run.ok) throw new Error(run.problems.join(" "));
+    expect(run.pages[0]?.presses[0]?.write).toMatchObject({ ok: true, cleanup: "removed" });
+    expect(undone).toEqual(["slow"]);
+  }, 180_000);
 
   it("photographs each page, and names where the picture went", async () => {
     // The pane's last advantage handed over: a person looking at the screen. The file has to

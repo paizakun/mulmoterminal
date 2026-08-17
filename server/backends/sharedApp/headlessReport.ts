@@ -55,12 +55,29 @@ function noticeLines(notices: readonly { code: string; detail: string }[], inden
  *  as a clean run. */
 const refusalDetail = (error: string): string => (error === "" ? "." : `: ${error}.`);
 
+/** Who said no, and what that means for a VISITOR — which is the only reason the line is worth
+ *  reading. Three answers, and confusing them sends the author to fix the wrong thing. */
+const REFUSED_HOW: Record<HeadlessWrite["reason"], string> = {
+  rules: "REFUSED by the deployed rules",
+  taken: "not written, because the id is already taken",
+  host: "not written",
+};
+
+const REFUSED_BY: Record<HeadlessWrite["reason"], (cid: string) => string[]> = {
+  rules: () => ["    That is the answer this run exists to bring back — a visitor pressing this button gets the same refusal, and the page cannot see why."],
+  taken: (cid) => [
+    `    That is NOT a verdict about a visitor. The id was already in use, and under \`idFrom: "auth.uid"\` the record it collided with is YOUR OWN — somebody else has a ` +
+      `different uid and would be accepted. Remove your record from '${cid}' if you want this button exercised for real.`,
+  ],
+  host: () => [
+    "    The database never saw it: this run could not get as far as writing. That is about the app or about this run — a projection that would not build, a required " +
+      "field the page did not send, no signed-in session — and NOT something the deployed rules refused.",
+  ],
+};
+
 function writeLines(write: HeadlessWrite): string[] {
   if (!write.ok) {
-    return [
-      `    The write was REFUSED by the deployed rules for '${write.cid}'${refusalDetail(write.error)}`,
-      "    That is the answer this run exists to bring back — a visitor pressing this button gets the same refusal, and the page cannot see why.",
-    ];
+    return [`    The write was ${REFUSED_HOW[write.reason]} for '${write.cid}'${refusalDetail(write.error)}`, ...REFUSED_BY[write.reason](write.cid)];
   }
   const kept =
     write.cleanup === "removed"

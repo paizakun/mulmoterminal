@@ -14,11 +14,17 @@
 // alternative — a bundler step, or hand-copying the functions into this string — would make what
 // runs here a copy that can drift silently.
 //
-// WHETHER IT ACCEPTS IS THE HOST'S TO DECIDE, and this module does not decide it. `submit` calls
-// `window.__previewWrite` when the host has exposed one, and refuses when it has not — so a run
-// driven by a test, with no app and no database behind it, behaves exactly as this harness always
-// did, and a run driven by `manageSharedApp` writes through the same function the pane's own
-// accept path calls.
+// WHETHER IT ACCEPTS IS THE HOST'S TO DECIDE, and the DECIDING HAPPENS IN NODE. This page never
+// reaches the database and holds nothing that could: `accept(answer)` is called with the verdict
+// already in hand, and `submit` hands that verdict back to the parent. A run driven by a test, with
+// no app and no database behind it, accepts nothing and behaves exactly as this harness always did.
+//
+// THE WRITER IS NOT A BINDING ON `window`, and that is a correction rather than a preference.
+// Puppeteer's `exposeFunction` installs its binding in EVERY document of the page — including the
+// sandboxed `srcdoc` this harness mounts, which is the one document here that nobody trusts. A page
+// could then call the writer directly, once per line of script, bypassing the run's budget, its
+// ledger and its undo: real records in a real app that nothing reports and nothing removes. Passing
+// the ANSWER in is what closes that. The page can only ever receive a value Node chose to give it.
 //
 // It used to refuse unconditionally, and the reason was real while it lasted: before staging was
 // removed an app had no `apps/{aid}` until it was deployed, so a confirmation accepted here was
@@ -53,9 +59,13 @@ export interface HarnessObservation {
    *  own crash look like a page that simply drew nothing. `detail` is PAGE-AUTHORED — see
    *  `ViewNotice` — so it is carried as the page's words and reported as such. */
   notices: { code: string; detail: string }[];
-  /** The verdicts the host's own writer gave, in the order the confirmations were accepted. Empty
-   *  when nothing was accepted, which is every run without a writer. */
-  writes: { cid: string; ok: boolean; error: string; token: string }[];
+  /** The confirmation waiting to be answered, with the VALUES the page submitted.
+   *
+   *  The values and not only their field names, because Node is what writes now: the record the
+   *  rules judge is built from these, and a host that could see only the keys would have to invent
+   *  the rest. They never leave this process — the harness reads them out of the cell the parent
+   *  already holds, and `runPagesHeadless` hands them to the writer. */
+  pending: { cid: string; values: Record<string, string> } | null;
 }
 
 /** The harness document. A constant rather than a file on disk: it is served from memory to a
@@ -81,7 +91,9 @@ let nonce = viewNonce();
 let outbound = [];
 let submitted = [];
 let notices = [];
-let writes = [];
+// The verdict Node handed in for the confirmation currently being answered. Null means nothing was
+// accepted, which is what \`submit\` refuses on.
+let answer = null;
 
 // The cells the bridge writes into. Plain objects with a \`value\`, which is all \`Signal<T>\` asks
 // for — the package holds no framework precisely so a host can supply its own, and a recorder's
@@ -142,27 +154,13 @@ const bridge = viewBridge(
     // they are answered on the port and never drawn, which is exactly why an author watching the
     // screen cannot see them.
     channel: recording(() => portChannel(frame)),
-    // THE HOST'S WRITER, or a refusal when there is none.
+    // THE ANSWER NODE ALREADY DECIDED, or a refusal when it decided nothing.
     //
-    // \`__previewWrite\` is exposed by the Node side and lands in \`writePreviewSubmission\` — the
-    // same function the pane's own accept path reaches through its HTTP route. A run with no
-    // writer (every test, and any caller that asks for none) refuses exactly as this harness
-    // always did, so the page sees a decision and never a hang.
-    submit: async (pending) => {
-      if (typeof window.__previewWrite !== "function") return { ok: false, error: "a headless preview never writes" };
-      // The verdict is recorded BEFORE it is returned, because the page is entitled to ignore the
-      // answer — and what the report needs is what the DATABASE said, not what the page did with
-      // it. \`token\` is what takes the record back; empty when the write was refused.
-      const answer = await window.__previewWrite(pending.cid, pending.values);
-      const verdict = {
-        cid: pending.cid,
-        ok: answer !== null && answer !== undefined && answer.ok === true,
-        error: answer !== null && answer !== undefined && typeof answer.error === "string" ? answer.error : "",
-        token: answer !== null && answer !== undefined && typeof answer.token === "string" ? answer.token : "",
-      };
-      writes.push(verdict);
-      return verdict.ok ? { ok: true } : { ok: false, error: verdict.error };
-    },
+    // Node writes the record (through \`writePreviewSubmission\` — the same function the pane's own
+    // accept path reaches through its HTTP route), and only then calls \`accept\` below with what
+    // the database said. So the page runs its real post-submit path against a real verdict, and
+    // this document never held anything that could reach a database.
+    submit: async () => answer ?? { ok: false, error: "a headless preview never writes" },
     state: () => datasets,
     notice: (report) => notices.push({ code: String(report.code), detail: String(report.detail) }),
   },
@@ -193,7 +191,7 @@ window.__preview = {
     outbound = [];
     submitted = [];
     notices = [];
-    writes = [];
+    answer = null;
     datasets = page.datasets;
     viewer = page.viewer ?? null;
     config = page.submit === null ? null : { submit: page.submit };
@@ -219,18 +217,22 @@ window.__preview = {
       submitted,
       refused: refusals(),
       notices,
-      writes,
+      pending: pendingValue === null ? null : { cid: pendingValue.cid, values: pendingValue.values },
     };
   },
   /** Answer the confirmation the way a visitor who changed their mind would. */
   decline() {
     bridge.decline();
   },
-  /** Answer it the way somebody who meant it would: the parent calls \`submit\` above, which is the
-   *  host's writer or a refusal. Awaited, so the verdict is in \`writes\` by the time the caller
-   *  observes — \`accept()\` resolves only after the write has answered. */
-  async accept() {
+  /** Answer it the way somebody who meant it would, with the verdict Node already has.
+   *
+   *  \`given\` is what the parent's \`submit\` will return — \`{ ok: true }\`, or \`{ ok: false, error }\`
+   *  carrying what the database said. The page's own success or failure path then runs against the
+   *  real answer, which is the whole reason to accept rather than to decline. */
+  async accept(given) {
+    answer = given;
     await bridge.accept();
+    answer = null;
   },
 };
 </script>

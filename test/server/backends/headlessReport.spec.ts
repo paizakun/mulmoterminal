@@ -46,7 +46,7 @@ const page = (over: Partial<HeadlessPageReport> = {}): HeadlessPageReport => ({
 /** A run that COULD write, because that is what `manageSharedApp` gives it. A run without a writer
  *  is its own case and has its own tests below — the two say opposite things about the same page. */
 /** An accepted write that was cleaned up — the ordinary outcome, and the one most tests want. */
-const written = (): HeadlessWrite => ({ cid: "orders", ok: true, error: "", cleanup: "removed", cleanupError: "" });
+const written = (): HeadlessWrite => ({ cid: "orders", ok: true, error: "", reason: "rules", cleanup: "removed", cleanupError: "" });
 
 const narrate = (over: Partial<HeadlessPageReport> = {}, omittedPages = 0, run: Partial<Extract<HeadlessRun, { ok: true }>> = {}): string =>
   narrateHeadlessRun({ ok: true, pages: [page(over)], omittedPages, writesSkipped: 0, screenshotDir: null, wrote: true, ...run });
@@ -126,7 +126,14 @@ describe("narrateHeadlessRun", () => {
       presses: [
         press({
           submitted: { cid: "orders", fields: ["name"] },
-          write: { cid: "orders", ok: false, error: "the window for slots/1 opens at 2027-01-01T00:00:00.000Z", cleanup: "not-written", cleanupError: "" },
+          write: {
+            cid: "orders",
+            ok: false,
+            error: "the window for slots/1 opens at 2027-01-01T00:00:00.000Z",
+            reason: "rules",
+            cleanup: "not-written",
+            cleanupError: "",
+          },
         }),
       ],
     });
@@ -135,12 +142,48 @@ describe("narrateHeadlessRun", () => {
     expect(said).toContain("a visitor pressing this button gets the same refusal");
   });
 
+  it("does not call a host-side failure a verdict of the deployed rules", () => {
+    // `writePreviewSubmission` fails for plenty of reasons that never reach the database — no
+    // session, a projection that will not build, a required field the page did not send. Reported
+    // as the rules refusing, the author goes and changes a declaration the rules never saw.
+    const said = narrate({
+      presses: [
+        press({
+          submitted: { cid: "orders", fields: [] },
+          write: { cid: "orders", ok: false, error: "missing: name", reason: "host", cleanup: "not-written", cleanupError: "" },
+        }),
+      ],
+    });
+    expect(said).not.toContain("REFUSED by the deployed rules");
+    expect(said).toContain("The database never saw it");
+  });
+
+  it("says an id collision is about the author, not about a visitor", () => {
+    // Under `idFrom: "auth.uid"` the record it collided with is the AUTHOR's own, and a visitor
+    // with a different uid would be accepted. Said as a refusal, this is simply false.
+    const said = narrate({
+      presses: [
+        press({
+          submitted: { cid: "orders", fields: [] },
+          write: { cid: "orders", ok: false, error: "already-taken", reason: "taken", cleanup: "not-written", cleanupError: "" },
+        }),
+      ],
+    });
+    expect(said).toContain("already taken");
+    expect(said).toContain("NOT a verdict about a visitor");
+    expect(said).toContain("the record it collided with is YOUR OWN");
+    expect(said).not.toContain("a visitor pressing this button gets the same refusal");
+  });
+
   it("names a record it could not take back, rather than reporting a clean run", () => {
     // The one outcome that costs somebody else something: a booking left standing occupies a real
     // slot in a real app. Silence here would read as "removed".
     const said = narrate({
       presses: [
-        press({ submitted: { cid: "orders", fields: [] }, write: { cid: "orders", ok: true, error: "", cleanup: "left", cleanupError: "not-this-session" } }),
+        press({
+          submitted: { cid: "orders", fields: [] },
+          write: { cid: "orders", ok: true, error: "", reason: "rules", cleanup: "left", cleanupError: "not-this-session" },
+        }),
       ],
     });
     expect(said).toContain("could NOT be removed (not-this-session)");

@@ -256,7 +256,10 @@ describe("shared app preview writes", () => {
 
     // `items` carries `allow update` and the author is the owner, so an overwrite would SUCCEED and
     // silently replace a real visitor's booking with a test one.
-    expect(result).toEqual({ ok: false, error: "already-taken" });
+    // `taken` rather than `rules`: under `idFrom: "auth.uid"` the record it collided with is the
+    // AUTHOR's own, and a visitor has a different uid — so a caller reporting this as the deployed
+    // rules refusing would be saying something false about everybody else.
+    expect(result).toEqual({ ok: false, reason: "taken", error: "already-taken" });
     expect(batched).toEqual([]);
   });
 
