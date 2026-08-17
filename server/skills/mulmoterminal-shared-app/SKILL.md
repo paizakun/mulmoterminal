@@ -145,9 +145,10 @@ Nothing generates them — the platform runs no code of its own — so they are 
 
 **Prove ONE batch before you generate thousands.** Write a single day, read it back with
 `getItems`, then run `check` (step 4b). `putItems` and `getItems` do not check the same things:
-`putItems` refuses a row missing a required field or carrying an unknown `enum` value, and that is
-all — the SHAPE of a typed value (a real date, a numeric `number`, a `datetime`'s exact format) is
-checked when a record is READ, and **refused at publish**. So 720 accepted rows are not 720 valid
+`putItems` refuses a row missing a required field or carrying an unknown `enum` value (and, under
+`mode: "create"`, an id that already exists) — but of what a row SAYS, that is all it looks at. The
+SHAPE of a typed value (a real date, a numeric `number`, a `datetime`'s exact format) is checked
+when a record is READ, and **refused at publish**. So 720 accepted rows are not 720 valid
 rows, and a publish that names them all is one regeneration per batch; one day first is one round
 trip.
 
