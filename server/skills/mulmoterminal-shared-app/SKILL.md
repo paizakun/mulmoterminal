@@ -151,6 +151,12 @@ checked when a record is READ, and **refused at publish**. So 720 accepted rows 
 rows, and a publish that names them all is one regeneration per batch; one day first is one round
 trip.
 
+**That proof needs a session.** `check` answers offline, and offline it does NOT read the records —
+it says so in as many words ("the live records were NOT scanned"). A `check` that has not scanned
+them proves nothing about the batch you just wrote, so connect first, and read the line: it either
+names the rows publish would refuse or reports the scan as done and clean. Generate the rest only
+after that.
+
 **`datetime` is a wall clock, not an instant.** `YYYY-MM-DDTHH:MM`, seconds optional, **no timezone
 suffix**. `new Date(...).toISOString()` is the reflex and it is wrong twice: the `Z` is refused at
 publish, and the time SHIFTS into whatever timezone this machine is in — a Tokyo court's 08:00
@@ -164,6 +170,12 @@ and daylight saving are what an LLM gets wrong, and a few hundred inline rows ar
 a token at a time. Have the script write a bare array of records to a JSON file under the workspace
 and pass its absolute path as `putItems`' `itemsFile` — 1000 rows and 8 MiB per call, and an
 over-limit call writes nothing at all.
+
+**Pass `mode: "create"`.** The default REPLACES a whole record, so a re-run — a retry, a refill that
+overlaps what is already there — silently overwrites fields nothing regenerated, and reading the ids
+first does not save you: another run or a hand edit can create the same id in the gap between the
+read and the write. `create` has the host refuse a colliding row instead; it comes back in
+`rejected`, which is not a failure but the count of rows that already existed.
 
 ### 3. RUN THE PAGE. Not reading it — running it.
 

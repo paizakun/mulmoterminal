@@ -129,8 +129,21 @@ describe("check", () => {
     withSession([{ id: "court-a-0800", data: { id: "court-a-0800", startAt: "2026-08-17T15:00:00.000Z" } }]);
     const report = await checkSharedApp(root);
     expect(report.ok).toBe(true);
-    expect(report.ok && report.recordScan?.records).toBe(1);
-    expect(report.ok && (report.recordScan?.lines ?? []).join(" ")).toContain("startAt");
+    expect(report.ok && report.records.scanned && report.records.scan.records).toBe(1);
+    expect(report.ok && report.records.scanned && report.records.scan.lines.join(" ")).toContain("startAt");
+  });
+
+  it("says the DECLARATION is why nothing was scanned, not the session", async () => {
+    // A signed-in author whose `app.json` does not parse was told the records went unscanned
+    // because they were not signed in — which sends them to reconnect, and the file stays broken.
+    // Nothing can be scanned here for a different reason: the manifest is what names the app and
+    // its collections.
+    writeFileSync(path.join(root, "app.json"), "{ not json");
+    withSession([]);
+    const report = await checkSharedApp(root);
+    expect(report.ok).toBe(true);
+    expect(report.ok && report.records).toEqual({ scanned: false, why: "unparsed-declaration" });
+    expect(report.ok && report.checkedAs).toBe("owner@example.com");
   });
 
   it("scans nothing, and says so, when there is no session", async () => {
@@ -141,6 +154,6 @@ describe("check", () => {
     withSlots(root);
     const report = await checkSharedApp(root);
     expect(report.ok).toBe(true);
-    expect(report.ok && report.recordScan).toBeNull();
+    expect(report.ok && report.records).toEqual({ scanned: false, why: "no-session" });
   });
 });

@@ -16,12 +16,19 @@ import { headlessPreview } from "../backends/sharedApp/headlessPreview.js";
 import { narrateHeadlessRun } from "../backends/sharedApp/headlessReport.js";
 import { publishSharedApp } from "../backends/sharedApp/publish.js";
 import { unpublishSharedApp } from "../backends/sharedApp/unpublish.js";
-import { APP_ROLE_NAMES, checkSharedApp, forkSharedApp, initSharedApp, inviteToSharedApp, type AppRoleName } from "../backends/sharedApp/declare.js";
+import {
+  APP_ROLE_NAMES,
+  checkSharedApp,
+  forkSharedApp,
+  initSharedApp,
+  inviteToSharedApp,
+  type AppRoleName,
+  type RecordScanResult,
+} from "../backends/sharedApp/declare.js";
 import { isRecord } from "../../common/isRecord.js";
 import { MULMOSERVER_ORIGIN } from "../../common/firebaseConfig.js";
 import { manifestKey } from "../backends/sharedApp/manifestWrite.js";
 import { serializeBy } from "../backends/sharedApp/serialize.js";
-import { type RecordScan } from "../backends/sharedApp/records.js";
 
 export const SHARED_APP_ACTIONS = ["init", "fork", "check", "preview", "invite", "publish", "unpublish"] as const;
 export type SharedAppAction = (typeof SHARED_APP_ACTIONS)[number];
@@ -233,33 +240,46 @@ async function narratePreview(root: string): Promise<string> {
  *  same broken row differently. What differs is the sentence around it: publish STOPS there and
  *  `confirm` is how you get past it, while `check` writes nothing either way.
  *
- *  The null case is the one that has to be said out loud rather than left as silence. `check`
- *  answers offline, an agent reads a report with no record line as "the records are fine", and
- *  that is exactly the belief that carries a few hundred bad rows to a publish. */
-function checkRecordNote(scan: RecordScan | null): string[] {
-  if (scan === null)
-    return [
-      "The live records were NOT scanned — `check` can only read them with a session open. Publish checks them too, " +
-        "against these same schemas, and refuses the rows that do not fit.",
-    ];
+ *  A scan that did not run is said out loud rather than left as silence. `check` answers offline,
+ *  an agent reads a report with no record line as "the records are fine", and that is the belief
+ *  that carries a few hundred bad rows to a publish — and the two reasons it did not run send the
+ *  author to different repairs, so each names its own. */
+export function checkRecordNote(records: RecordScanResult): string[] {
+  if (!records.scanned)
+    return records.why === "no-session"
+      ? [
+          "The live records were NOT scanned — `check` can only read them with a session open. Publish checks them too, " +
+            "against these same schemas, and refuses the rows that do not fit.",
+        ]
+      : [
+          "The live records were NOT scanned — nothing knows which app or which collections to read until `app.json` parses. " +
+            "Fix the declaration above and run check again.",
+        ];
+  const { scan } = records;
+  const notes: string[] = [];
+  // BOTH, when both happened. `scanRecords` skips a collection it cannot read and goes on to the
+  // next, so an unreadable one does not mean the rest went unexamined — and dropping their findings
+  // here would hide rows publish is about to name. (Publish's own `recordRefusal` returns early on
+  // `unreadable` for a different reason: there it decides ONE thing, whether `confirm` may be spent,
+  // and it may not be. `check` decides nothing and is only reporting.)
   if (scan.unreadable.length > 0)
-    return [
+    notes.push(
       ...scan.unreadable,
-      "The live records could not be read, so nothing checked whether these schemas still fit them. Publish stops there too, and `confirm` does not override it.",
-    ];
-  if (scan.records === 0) return [];
-  return [...scan.lines, "publish refuses these rows, and only `confirm` gets past it — which accepts the breakage for everyone."];
+      "Those collections' records could not be read, so nothing checked whether these schemas still fit them. Publish stops there too, and `confirm` does not override it.",
+    );
+  if (scan.records > 0) notes.push(...scan.lines, "publish refuses these rows, and only `confirm` gets past it — which accepts the breakage for everyone.");
+  return notes;
 }
 
 /** Whether the records alone would stop a publish. A declaration can be perfect and this still be
  *  true, which is why the headline is not decided by `problems` on its own. */
-const recordsWouldRefuse = (scan: RecordScan | null): boolean => scan !== null && (scan.records > 0 || scan.unreadable.length > 0);
+const recordsWouldRefuse = (records: RecordScanResult): boolean => records.scanned && (records.scan.records > 0 || records.scan.unreadable.length > 0);
 
 async function narrateCheck(root: string): Promise<string> {
   const report = await checkSharedApp(root);
   if (!report.ok) return report.problems.join("\n");
   const found = report.collections.length === 0 ? "no shared collections in this repository yet" : `shared collections: ${report.collections.join(", ")}`;
-  const records = checkRecordNote(report.recordScan);
+  const records = checkRecordNote(report.records);
   // WHOSE publish was checked, always said out loud: signed in it is you, signed out it is the
   // owner the declaration names, and "it would publish for somebody else" is not the same answer.
   const as =
@@ -267,7 +287,7 @@ async function narrateCheck(root: string): Promise<string> {
       ? `Checked as the declared owner (${report.declaredOwner ?? "none named"}) — not signed in, so it could not be checked against your address.`
       : `Checked as ${report.checkedAs}.`;
   if (report.problems.length === 0) {
-    const headline = recordsWouldRefuse(report.recordScan)
+    const headline = recordsWouldRefuse(report.records)
       ? `The declaration is publishable, but the records already in the app are not (${found}):`
       : `The declaration is publishable. ${found}.`;
     return [headline, ...records, ...warningNote(report.warnings), as, "Nothing was written — this only reads."].join("\n");
