@@ -227,10 +227,19 @@ function pageLines(page: HeadlessPageReport): string[] {
 
 /** The fixed close. Not omitted on a clean run, and not softened: the run proves the drawing and
  *  the wiring, and the four things it hides are the ones that only appear after publishing. */
-const STILL_UNKNOWN =
+/** What is still unknown after the run, which depends on whether anything was ACTUALLY written.
+ *
+ *  Not on whether a writer existed: `headlessPreview` always supplies one, and until the runtime
+ *  marks a submission as click-caused every confirmation is declined anyway. Keyed on the writer,
+ *  this closed by telling the reader the rules had been answered on a run that never reached
+ *  them — the single most expensive sentence in the report to have wrong, because it is the one a
+ *  reader takes as the verdict. */
+const stillUnknown = (wroteAnything: boolean): string =>
   "This does NOT prove the app is ready to publish. It says nothing about other people's devices, about two people submitting at once, or about anything a " +
-  "collection this run did not reach would do. What it does now answer is the rules — every accepted confirmation above was a real write, judged by the rules " +
-  "as they are deployed, and taken back again.";
+  "collection this run did not reach would do." +
+  (wroteAnything
+    ? " What it does answer is the rules — every accepted confirmation above was a real write, judged by the rules as they are deployed, and taken back again."
+    : " It says nothing about whether the deployed rules would accept a write, or whether they are deployed at all: nothing was written.");
 
 /** The fixed close, in the two shapes a run can have.
  *
@@ -252,9 +261,25 @@ function whatWasWritten(pages: readonly HeadlessPageReport[]): string[] {
   const writes = pages.flatMap((page) => page.presses.flatMap((press) => (press.write === null ? [] : [press.write])));
   const made = writes.filter((write) => write.ok);
   const refused = writes.length - made.length;
-  if (writes.length === 0) return ["No confirmation was accepted: nothing on these pages submitted, so nothing was written."];
+  const withheld = pages.flatMap((page) => page.presses.filter((press) => press.writeWithheld)).length;
+  if (writes.length === 0) return [nothingWritten(withheld)];
   const left = made.filter((write) => write.cleanup !== "removed").length;
   return [...removedLine(made.length - left), ...standingLine(left, made.length), ...refusedSummary(refused)];
+}
+
+/** A run that wrote nothing, and WHY — which is two different reports.
+ *
+ *  A page nobody could submit from, and a page that submitted fine but whose submissions carried no
+ *  evidence of a cause, are opposite findings. Rolled into one sentence the second reads as the
+ *  first, and an author goes looking for a dead button that works. */
+function nothingWritten(withheld: number): string {
+  if (withheld === 0) return "No confirmation was accepted: nothing on these pages submitted, so nothing was written.";
+  const many = withheld === 1 ? "1 submission" : `${withheld} submissions`;
+  return (
+    `${many} reached the parent and NONE was written: they carried no mark from the runtime saying a click had caused them, and this run will not put a record in a ` +
+    "real app without one. The pages and their controls were exercised — what was not tested is what the deployed rules would say. For that, ask the user to press " +
+    "Preview in the Collections pane, where a person supplies the proof."
+  );
 }
 
 const removedLine = (removed: number): string[] =>
@@ -302,7 +327,8 @@ function closing(run: { wrote: boolean; writesSkipped: number; screenshotDir: st
         "about two people submitting at once, or about whether the rules are deployed at all.",
     ];
   }
-  return ["", ...whatWasWritten(run.pages), ...skipped, ...pictures, STILL_UNKNOWN];
+  const wroteAnything = run.pages.some((page) => page.presses.some((press) => press.write !== null));
+  return ["", ...whatWasWritten(run.pages), ...skipped, ...pictures, stillUnknown(wroteAnything)];
 }
 
 export function narrateHeadlessRun(run: HeadlessRun): string {

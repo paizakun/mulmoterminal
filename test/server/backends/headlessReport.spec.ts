@@ -128,6 +128,27 @@ describe("narrateHeadlessRun", () => {
     expect(said).toContain("Remove it by hand before publishing");
   });
 
+  it("does not say the rules were answered on a run that wrote nothing", () => {
+    // The close was keyed on whether a WRITER existed, and `headlessPreview` always supplies one —
+    // so a run that declined every confirmation still ended by telling the reader the rules had
+    // been answered. That is the single most expensive sentence here to have wrong: it is the one
+    // a reader takes as the verdict.
+    const said = narrate({ presses: [press({ submitted: { cid: "orders", fields: [] }, writeWithheld: true })] });
+    expect(said).not.toContain("What it does answer is the rules");
+    expect(said).toContain("whether the deployed rules would accept a write");
+  });
+
+  it("tells a run that could not submit from one whose submissions were unproven", () => {
+    // Opposite findings: a page with a dead button, and a page that works whose submissions carried
+    // no evidence of a cause. Said the same way, an author goes looking for a dead button that
+    // works perfectly.
+    const dead = narrate({ presses: [press()] });
+    expect(dead).toContain("nothing on these pages submitted");
+    const unproven = narrate({ presses: [press({ submitted: { cid: "orders", fields: [] }, writeWithheld: true })] });
+    expect(unproven).toContain("1 submission reached the parent and NONE was written");
+    expect(unproven).toContain("The pages and their controls were exercised");
+  });
+
   it("does not claim a write happened when every submission was refused", () => {
     // The closing lines are fixed text, which is exactly why a false one there is expensive: it
     // reads as a guarantee because it is the same every time. A run whose only write was refused
