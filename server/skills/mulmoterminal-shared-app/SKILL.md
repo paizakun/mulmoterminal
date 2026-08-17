@@ -191,7 +191,9 @@ read and the write. `create` has the host refuse a colliding row instead.
 `{ written, rejected }` with one `{ id, problem }` per refused row, and the `problem` is as likely
 to be a missing required field or an unknown `enum` value as an id that already existed. So go
 through them: every `problem` that is not "already exists" is a row that was NOT written, and it
-needs fixing and re-sending — just that row.
+needs fixing and re-sending — just that row. A refusal of the whole CALL (over the row or byte
+limit) is a different thing and does not arrive as `rejected` at all: no `{ written, rejected }`
+comes back, nothing was written, and the fix is to split the file rather than to re-send rows.
 
 And "already exists" says exactly that much: the id was there when the write ran. It does not say
 who put it there — an earlier attempt of this same refill, another run, a hand edit — and it does
