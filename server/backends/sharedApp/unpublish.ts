@@ -5,9 +5,12 @@
 // projection behind it, which is a tidiness problem; the other order would leave it open with the
 // projection gone, which is the failure this ordering exists to make impossible.
 //
-// The schemas under `collections/{cid}` are deliberately LEFT: nobody can read them while the
-// app is closed, so they cost nothing, and publishing again then rewrites them in place rather
-// than rebuilding the collection from nothing.
+// The schemas under `collections/{cid}` are deliberately LEFT. `schemaRead` is
+// `readerOf || publicRead || partRead`, so closing the app takes the middle clause away and a
+// STRANGER can no longer reach them — while the roster still can, which is right: the members'
+// and participants' pages stay standing (below), and a page that could not read its own schema
+// would draw nothing. Publishing again then rewrites them where they stand rather than rebuilding
+// the collection from nothing.
 //
 // It deliberately does NOT run the declaration gate that `check` and publish share, and it does
 // not mint an `aid` the way they do. Those steps decide whether something may go OUT; taking it
