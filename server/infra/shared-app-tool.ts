@@ -267,7 +267,17 @@ export function checkRecordNote(records: RecordScanResult): string[] {
       ...scan.unreadable,
       "Those collections' records could not be read, so nothing checked whether these schemas still fit them. Publish stops there too, and `confirm` does not override it.",
     );
-  if (scan.records > 0) notes.push(...scan.lines, "publish refuses these rows, and only `confirm` gets past it — which accepts the breakage for everyone.");
+  if (scan.records > 0)
+    notes.push(
+      ...scan.lines,
+      // What `confirm` buys depends on the OTHER half of the scan. `recordRefusal` returns on
+      // `unreadable` before it ever weighs `confirm`, so offering it while a collection cannot be
+      // read promises a publish that refuses anyway — and points at the wrong repair, which is the
+      // whole reason these two are kept apart.
+      scan.unreadable.length > 0
+        ? "publish refuses these rows — and it does not get as far as weighing `confirm` while a collection above cannot be read, so that is the first repair."
+        : "publish refuses these rows, and only `confirm` gets past it — which accepts the breakage for everyone.",
+    );
   return notes;
 }
 

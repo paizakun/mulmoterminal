@@ -101,7 +101,10 @@ describe("manageSharedApp, the tool", () => {
     }).join("\n");
     expect(note).toContain("rooms: permission denied");
     expect(note).toContain("court-a-0800");
-    expect(note).toContain("only `confirm` gets past it");
+    // And it must NOT offer `confirm` here: `recordRefusal` returns on `unreadable` before it
+    // weighs one, so a publish with both states refuses however it is confirmed.
+    expect(note).not.toContain("only `confirm` gets past it");
+    expect(note).toContain("that is the first repair");
   });
 
   it("does not call unread records invalid ones", () => {
