@@ -21,13 +21,12 @@
 //
 //   A WITHDRAWN PAGE IS DELETED, not merely stopped being written. The tier is
 //   readable by everyone it admits, forever: drop a view from `views[]` and the
-//   old page stays fetchable until something removes it. Deploy withdraws its
-//   `staged:`, publish withdraws its `live:`.
+//   old page stays fetchable until something removes it, so publish withdraws
+//   the `live:` documents its own declaration no longer names.
 //
-//   DEPLOY AND PUBLISH WRITE THE SAME SHAPE at two prefixes. That is what makes
-//   "try the staff page before the customers see it" possible at all, and it is
-//   the same road the schemas already travel (`staging/{cid}` then
-//   `collections/{cid}`).
+//   `live:` IS A PREFIX WITH NOTHING TO CONTRAST WITH, and it is kept anyway —
+//   it is how that sweep tells a page THIS code wrote from any other document in
+//   the tier. See `staleViewDocs` below.
 import {
   appViewTierPath,
   participantScope,
@@ -124,11 +123,12 @@ const wantedDocIds = (plan: TierPlan): Set<string> => {
   return new Set([viewConfigDocId(), ...plan.pages.map((page) => viewDocId(page.id))]);
 };
 
-/** Documents at this stage that the declaration no longer names.
+/** Documents in this tier that the declaration no longer names.
  *
- *  Listed rather than inferred, for the reason `staleStaged` gives about the
- *  schemas: a page withdrawn from `views[]` leaves a document nothing would
- *  otherwise touch, the entrance goes on offering it.
+ *  Listed rather than inferred, for the reason the schemas' own sweep had: the
+ *  declaration says what SHOULD be there and nothing says what is, so a page
+ *  withdrawn from `views[]` leaves a document nothing would otherwise touch —
+ *  and the entrance goes on offering it.
  *
  *  `live:` is the only prefix there is. There was a `staged:` set beside it, written by a deploy
  *  for the roster to try; both are gone (`plans/feat-shared-app-no-staging.md`). */

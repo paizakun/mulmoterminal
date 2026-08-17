@@ -144,13 +144,14 @@ const liveMirrorOf = (live: Record<string, unknown> | null, cid: string): string
  *  reads only happen for collections that changed. */
 export async function frozenKeyProblems(
   authored: AuthoredApp,
-  promoted: Record<string, { mirrorOf?: string | undefined }>,
+  declared: Record<string, { mirrorOf?: string | undefined }>,
   live: Record<string, unknown> | null,
   handle: SharedAppHandle,
 ): Promise<string[]> {
   const problems: string[] = [];
-  // The submission side is published from the MANIFEST, so that is what this
-  // compares. The collection side below is not.
+  // Both halves are published from the MANIFEST, so that is what this compares.
+  // The collection side below used to read what a DEPLOY had staged, because
+  // that was the version publish promoted; there is one version now.
   for (const [cid, submit] of Object.entries(authored.public?.submit ?? {})) {
     problems.push(
       ...(await movedUnderRecords(
@@ -162,18 +163,13 @@ export async function frozenKeyProblems(
       )),
     );
   }
-  // From what DEPLOY staged, because that is what publish promotes. Reading
-  // `app.json` here would let an author deploy a changed mirror, revert the
-  // key locally, and publish a promotion this gate never saw.
-  //
-  // The UNION with what is live, not just what is promoted: deploy withdraws
-  // the staging document of a collection the repository no longer has, so a
-  // mirror REMOVED that way is absent from `promoted` entirely — and a loop
-  // over `promoted` alone would never compare it against the live half it is
-  // about to drop.
-  for (const cid of new Set([...Object.keys(promoted), ...liveCollectionCids(live)])) {
+  // The UNION with what is live, not just what the manifest declares: a
+  // collection the repository no longer has is absent from `declared`
+  // entirely, and a loop over `declared` alone would never compare it against
+  // the live half it is about to drop.
+  for (const cid of new Set([...Object.keys(declared), ...liveCollectionCids(live)])) {
     const was = liveMirrorOf(live, cid);
-    const now = text(promoted[cid]?.mirrorOf);
+    const now = text(declared[cid]?.mirrorOf);
     if (was === now) continue;
     problems.push(
       ...(await movedUnderRecords(handle, authored.aid, cid, [{ key: "mirrorOf", was, now }], "the projection those records are the public face of")),
