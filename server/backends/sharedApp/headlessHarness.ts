@@ -65,7 +65,7 @@ export interface HarnessObservation {
    *  rules judge is built from these, and a host that could see only the keys would have to invent
    *  the rest. They never leave this process — the harness reads them out of the cell the parent
    *  already holds, and `runPagesHeadless` hands them to the writer. */
-  pending: { cid: string; values: Record<string, string> } | null;
+  pending: { cid: string; values: Record<string, string>; clickCaused: boolean } | null;
 }
 
 /** The harness document. A constant rather than a file on disk: it is served from memory to a

@@ -114,25 +114,6 @@ function handshakeLine(page: HeadlessPageReport): string {
   return "It answered the handshake and was sent its records.";
 }
 
-/** A page that submitted with nobody having pressed anything.
- *
- *  Two things at once, and both are worth a line: a visitor opening this page is shown a
- *  confirmation they never asked for, and every press reported below had to be measured from AFTER
- *  this — without that, one automatic submission makes every button on the page look wired. */
-/** The page submits with nobody pressing anything — which decides whether this run wrote here.
- *
- *  Stated with its LIMIT, because the measurement is a window and not a proof: a page whose timer
- *  is slower than it looks quiet, and a reader who takes this for a guarantee would trust an
- *  attribution nothing established. */
-function unpromptedLine(page: HeadlessPageReport): string[] {
-  if (!page.submitsUnprompted) return [];
-  return [
-    `This page SUBMITS WITHOUT BEING PRESSED, so nothing on it was accepted: a submission that arrives during a press cannot be told from one the press caused, and a ` +
-      `write on a guess is a real record in a real app. (It was watched doing nothing for ${LIMITS.unpromptedMs}ms — a page that waits longer than that before ` +
-      `submitting would look quiet here.)`,
-  ];
-}
-
 function onLoadLine(page: HeadlessPageReport): string[] {
   if (page.submittedOnLoad === 0) return [];
   const times = page.submittedOnLoad === 1 ? "once" : `${page.submittedOnLoad} times`;

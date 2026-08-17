@@ -32,7 +32,6 @@ const page = (over: Partial<HeadlessPageReport> = {}): HeadlessPageReport => ({
   readied: true,
   stateDelivered: true,
   unresponsive: false,
-  submitsUnprompted: false,
   submittedOnLoad: 0,
   liveForms: 0,
   text: "Curry, Ramen",
@@ -101,15 +100,13 @@ describe("narrateHeadlessRun", () => {
     expect(clean).toContain("two people submitting at once");
   });
 
-  it("says a page that submits by itself was not written to, and why", () => {
-    // A count that grew is not proof the CLICK grew it. Where cause is unknowable the destructive
-    // reading is the one to refuse — and the reader has to be told that is what happened, or an
-    // untested page reads as a tested one.
-    const said = narrate({ submitsUnprompted: true, presses: [press({ submitted: { cid: "orders", fields: [] }, writeWithheld: true })] });
-    expect(said).toContain("SUBMITS WITHOUT BEING PRESSED");
-    expect(said).toContain("cannot be told from one the press caused");
-    // And the LIMIT of the measurement, so nobody reads it as a proof.
-    expect(said).toContain("would look quiet here");
+  it("says a submission without a click mark was not written to, and why", () => {
+    // The runtime is the only code that knows whether a click caused a submission. If it did not
+    // mark the submission, we cannot write it — the cause is unknowable.
+    const said = narrate({ presses: [press({ submitted: { cid: "orders", fields: [] }, writeWithheld: true })] });
+    expect(said).toContain("did not carry a mark from the runtime");
+    expect(said).toContain("made during a click dispatch");
+    expect(said).toContain("timer or `onState`");
   });
 
   it("does not say a record was removed when one is still standing", () => {

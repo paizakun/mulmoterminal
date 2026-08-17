@@ -464,7 +464,7 @@ const BLOCKED_FORM = "Blocked form submission";
 /** The browser, with everything one run needs said in this repository's words rather than
  *  puppeteer's. Made by `openDriver` so the reporting below reads as what it is doing rather than
  *  as automation. */
-interface Driver {
+export interface Driver {
   /** Mount one document and wait for the handshake — or for the wait to run out, which is itself
    *  the answer (`ready()` never reached the parent). Clears what the browser has said, so what is
    *  collected afterwards belongs to THIS document. */
