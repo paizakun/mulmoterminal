@@ -5,7 +5,7 @@
 // retry rather than report. So every path out of here is a string.
 import { describe, it, expect, beforeAll } from "vitest";
 import { readFileSync, writeFileSync } from "node:fs";
-import { MANAGE_SHARED_APP, SHARED_APP_ACTIONS, checkRecordNote, manageSharedApp, pageNote } from "../../../server/infra/shared-app-tool.js";
+import { MANAGE_SHARED_APP, SHARED_APP_ACTIONS, checkRecordNote, manageSharedApp, pageNote, recordsHeadline } from "../../../server/infra/shared-app-tool.js";
 import { HOST_TOOL_DEFINITIONS } from "../../../server/infra/host-tools.js";
 import { groupOfTool } from "../../../common/toolGroups.js";
 import { setFirestoreAccessor, setSharedCollectionsSupport } from "@mulmoclaude/core/collection/server";
@@ -102,6 +102,24 @@ describe("manageSharedApp, the tool", () => {
     expect(note).toContain("rooms: permission denied");
     expect(note).toContain("court-a-0800");
     expect(note).toContain("only `confirm` gets past it");
+  });
+
+  it("does not call unread records invalid ones", () => {
+    // Access and migration are opposite repairs. A collection nobody could read says nothing about
+    // the rows behind it, and "the records are not publishable" reads as invalid data — sending the
+    // author to migrate records they have not seen.
+    const unread = recordsHeadline(
+      { scanned: true, scan: { lines: [], records: 0, capped: false, unreadable: ["rooms: permission denied"] } },
+      "shared collections: rooms",
+    );
+    expect(unread).toContain("UNKNOWN");
+    expect(unread).not.toContain("are not");
+
+    const broken = recordsHeadline({ scanned: true, scan: { lines: ["slots: 3 …"], records: 3, capped: false, unreadable: [] } }, "shared collections: slots");
+    expect(broken).toContain("the records already in the app are not");
+
+    expect(recordsHeadline({ scanned: true, scan: { lines: [], records: 0, capped: false, unreadable: [] } }, "shared collections: slots")).toBeNull();
+    expect(recordsHeadline({ scanned: false, why: "no-session" }, "shared collections: slots")).toBeNull();
   });
 
   it("blames the declaration, not the session, when app.json does not parse", async () => {

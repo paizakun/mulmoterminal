@@ -271,9 +271,22 @@ export function checkRecordNote(records: RecordScanResult): string[] {
   return notes;
 }
 
-/** Whether the records alone would stop a publish. A declaration can be perfect and this still be
- *  true, which is why the headline is not decided by `problems` on its own. */
-const recordsWouldRefuse = (records: RecordScanResult): boolean => records.scanned && (records.scan.records > 0 || records.scan.unreadable.length > 0);
+/** The headline when the records alone would stop a publish, or null when they would not. A
+ *  declaration can be perfect and a publish still refuse, which is why this is not decided by
+ *  `problems` on its own.
+ *
+ *  Two states, kept apart because they send the author to opposite repairs. Rows that do not fit
+ *  are a MIGRATION — they are known, they are named, and `confirm` is the decision to break them.
+ *  A collection that could not be read is ACCESS, and nothing at all is known about the rows behind
+ *  it; calling those "not publishable" reads as invalid data and starts a migration of records
+ *  nobody has seen. */
+export function recordsHeadline(records: RecordScanResult, found: string): string | null {
+  if (!records.scanned) return null;
+  const { scan } = records;
+  if (scan.records > 0) return `The declaration is publishable, but the records already in the app are not (${found}):`;
+  if (scan.unreadable.length > 0) return `The declaration is publishable; whether the records fit it is UNKNOWN, and publish stops there (${found}):`;
+  return null;
+}
 
 async function narrateCheck(root: string): Promise<string> {
   const report = await checkSharedApp(root);
@@ -287,9 +300,7 @@ async function narrateCheck(root: string): Promise<string> {
       ? `Checked as the declared owner (${report.declaredOwner ?? "none named"}) — not signed in, so it could not be checked against your address.`
       : `Checked as ${report.checkedAs}.`;
   if (report.problems.length === 0) {
-    const headline = recordsWouldRefuse(report.records)
-      ? `The declaration is publishable, but the records already in the app are not (${found}):`
-      : `The declaration is publishable. ${found}.`;
+    const headline = recordsHeadline(report.records, found) ?? `The declaration is publishable. ${found}.`;
     return [headline, ...records, ...warningNote(report.warnings), as, "Nothing was written — this only reads."].join("\n");
   }
   return [

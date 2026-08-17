@@ -146,6 +146,28 @@ describe("check", () => {
     expect(report.ok && report.checkedAs).toBe("owner@example.com");
   });
 
+  it("keeps a collection it could not read apart from a record that does not fit", async () => {
+    withApp(root, '<div id="grid"></div><script>view.onState((d) => draw(d)); view.ready();</script>');
+    withSlots(root);
+    setFirestoreAccessor(() => ({
+      email: "owner@example.com",
+      uid: "uid_owner",
+      docs: {
+        list: () => Promise.reject(new Error("permission denied")),
+        get: async () => null,
+        set: async () => {},
+        create: async () => true,
+        delete: async () => false,
+        watch: () => () => {},
+      },
+    }));
+    const report = await checkSharedApp(root);
+    expect(report.ok && report.records.scanned && report.records.scan.unreadable.join(" ")).toContain("slots");
+    // Nothing is KNOWN about those rows, so they are not counted as rows that do not fit — the two
+    // send an author to opposite repairs (access, not a migration).
+    expect(report.ok && report.records.scanned && report.records.scan.records).toBe(0);
+  });
+
   it("scans nothing, and says so, when there is no session", async () => {
     // `check` answers offline and must keep doing so — but a report with no record line reads as
     // "the records are fine", which is the belief that carried those 720 rows to a publish. The
