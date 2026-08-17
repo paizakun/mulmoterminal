@@ -755,12 +755,27 @@ async function pressOne(driver: Driver, input: HeadlessPageInput, index: number,
   // opening script, from `onState`, from a timer. Read without this, that submission is reported
   // as the work of whichever control happened to be under test — and since every press gets a
   // fresh mount, EVERY button on such a page looks correctly wired when none of them is.
-  const before = await driver.observe();
   // ANYTHING ALREADY PENDING IS ANSWERED FIRST, so the control under test is actually exercised.
   // A page that submits on load leaves a confirmation open across the mount, and the parent refuses
   // a second one while it is (`busy`) — so without this, every button on such a page is answered by
   // the bridge rather than by the page, and reported as having reached nothing.
-  await driver.decline();
+  //
+  // AND THE GROUND IS RE-READ AFTERWARDS, which is the part that is easy to leave out. Declining
+  // SETTLES the page's own `submit()` promise, and a page is entitled to submit again from that
+  // promise's `false` branch — a "that didn't work, try once more" that costs nothing to write.
+  // That resubmission lands before the click, so a `before` captured above it counts as this
+  // control's work: a real record written for a control nobody pressed, reported against a button
+  // that is inert. Read after the page has had its turn, it is already in `before` and the press
+  // is measured from the truth.
+  //
+  // The extra wait is paid ONLY by a page that had something pending. An ordinary page observes
+  // once and goes straight to the click.
+  let before = await driver.observe();
+  if (before.pending !== null) {
+    await driver.decline();
+    await new Promise((resolve) => setTimeout(resolve, LIMITS.settleMs));
+    before = await driver.observe();
+  }
   const noiseBefore = driver.noise().length;
 
   // THROUGH THE BROWSER, at the control's coordinates, so the event lands where a person's would.

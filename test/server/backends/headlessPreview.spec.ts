@@ -116,6 +116,24 @@ const SUBMITS_ON_LOAD = `
   view.submit("orders", { name: "nobody asked" });
 </script>`;
 
+/** A page that submits on load AND submits again the moment its confirmation is answered.
+ *
+ *  "That didn't work, try once more" — a handler that costs nothing to write. It is the page that
+ *  breaks a run which clears the pending confirmation and then measures the press from what it saw
+ *  BEFORE clearing: the resubmission lands in between, so the inert button below is credited with
+ *  it and a real record is written for a control nobody pressed. */
+const RESUBMITS_ON_DECLINE = `
+<button type="button" id="go">Order</button>
+<script>
+  const view = window.__MC_APP_VIEW;
+  view.onState(() => {});
+  view.ready();
+  const again = () => { view.submit("orders", { name: "again" }); };
+  // Both branches, because what a declined confirmation does to the promise is the parent's
+  // business and this page is written by somebody who does not know or care which it is.
+  view.submit("orders", { name: "nobody asked" }).then(again, again);
+</script>`;
+
 /** A page that rearranges its own controls when an input is filled.
  *
  *  Ordinary reactive behaviour, and it moves the ground under a survey taken before the filling:
@@ -490,6 +508,27 @@ describe.skipIf(!chromeReady)("a headless run, in a real browser", () => {
     // ...and its button is inert, so nothing was pressed into existence and NOTHING was written.
     expect(run.pages[0]?.presses[0]?.submitted).toBeNull();
     expect(run.pages[0]?.presses[0]?.write).toBeNull();
+    expect(wrote).toEqual([]);
+  }, 120_000);
+
+  it("does not credit the click with a submission the page reissued while being declined", async () => {
+    // The race the pre-decline opened. Declining SETTLES the page's own `submit()` promise, and a
+    // page may submit again from that promise's `false` branch — before the click. Measured from a
+    // `before` captured above the decline, that resubmission is counted as this control's work: a
+    // real record for a button that does nothing.
+    const wrote: string[] = [];
+    const run = await runPagesHeadless([page("resubmits", RESUBMITS_ON_DECLINE)], {
+      write: async (_cid, values) => {
+        wrote.push(values.name ?? "");
+        return { ok: true, token: `t${wrote.length}` };
+      },
+      undo: async () => ({ ok: true }),
+    });
+    if (!run.ok) throw new Error(run.problems.join(" "));
+    // The button is inert. Whatever the page did to itself, nothing was pressed into existence...
+    expect(run.pages[0]?.presses[0]?.submitted).toBeNull();
+    // ...and NOTHING was written. This is the assertion: a write here is a record in a real app,
+    // made on behalf of a control nobody can blame.
     expect(wrote).toEqual([]);
   }, 120_000);
 
