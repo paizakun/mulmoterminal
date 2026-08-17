@@ -153,9 +153,13 @@ trip.
 
 **That proof needs a session.** `check` answers offline, and offline it does NOT read the records —
 it says so in as many words ("the live records were NOT scanned"). A `check` that has not scanned
-them proves nothing about the batch you just wrote, so connect first, and read the line: it either
-names the rows publish would refuse or reports the scan as done and clean. Generate the rest only
-after that.
+them proves nothing about the batch you just wrote, so connect first, and read the line. It says one
+of four things, and only ONE of them is a proof: the scan ran and found nothing. The others are not
+degrees of the same answer — rows that do not fit are a MIGRATION (they are named), a collection
+reported UNKNOWN could not be read at all (that is access, and nothing is known about the rows
+behind it), and a scan that did not run says whether it was the session or an `app.json` that does
+not parse. Generate the rest only after a scan that ran and came back clean; anything else is
+repaired first.
 
 **`datetime` is a wall clock, not an instant.** `YYYY-MM-DDTHH:MM`, seconds optional, **no timezone
 suffix**. `new Date(...).toISOString()` is the reflex and it is wrong twice: the `Z` is refused at
@@ -174,8 +178,13 @@ over-limit call writes nothing at all.
 **Pass `mode: "create"`.** The default REPLACES a whole record, so a re-run — a retry, a refill that
 overlaps what is already there — silently overwrites fields nothing regenerated, and reading the ids
 first does not save you: another run or a hand edit can create the same id in the gap between the
-read and the write. `create` has the host refuse a colliding row instead; it comes back in
-`rejected`, which is not a failure but the count of rows that already existed.
+read and the write. `create` has the host refuse a colliding row instead.
+
+**And then read `rejected`.** It is not a count and not only about collisions: `putItems` returns
+`{ written, rejected }` with one `{ id, problem }` per refused row, and the `problem` is as likely
+to be a missing required field or an unknown `enum` value as an id that already existed. So go
+through them: the ones that already existed are the refill working, and every other `problem` is a
+row that was NOT written and needs fixing and re-sending — just that row.
 
 ### 3. RUN THE PAGE. Not reading it — running it.
 
