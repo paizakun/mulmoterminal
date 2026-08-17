@@ -24,7 +24,8 @@
 // models. A run with no browser installed says so and reports nothing, which is the honest answer.
 import { createServer, type Server } from "node:http";
 import type { Browser, Frame, Page } from "puppeteer";
-import { readFile, readdir } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isRecord } from "../../../common/isRecord.js";
@@ -32,6 +33,7 @@ import type { PreviewAudience, PreviewDataset } from "../../../common/sharedAppP
 import type { Viewer } from "@receptron/sharedapp/view";
 import { previewPageKey } from "../../../common/sharedAppPreview.js";
 import { previewSharedApp } from "./preview.js";
+import { undoPreviewSubmission, writePreviewSubmission } from "./previewWrite.js";
 import { VIEW_MOUNT, HARNESS_HTML, type HarnessObservation } from "./headlessHarness.js";
 
 /** One document to run, with everything the parent would hand it. */
@@ -54,6 +56,48 @@ export interface HeadlessPageInput {
    *  which sends no `viewer` at all: the page draws none of its buttons and the report says its
    *  controls were not there, which is a false account of a page that is fine. */
   viewer?: Viewer | undefined;
+}
+
+/** What the host does when a confirmation is accepted, and how it takes the write back.
+ *
+ *  INJECTED rather than imported, and that is what keeps `runPagesHeadless` drivable by a test with
+ *  a page it wrote by hand — no app, no session, no database. A run given no writer declines every
+ *  confirmation, exactly as every run did before `plans/feat-headless-preview-parity.md`, and says
+ *  so in its report rather than looking like a run that found nothing to press.
+ *
+ *  `write` is `writePreviewSubmission` and `undo` is `undoPreviewSubmission` — the same two
+ *  functions the pane reaches through its HTTP route, so what the rules judge here is the record
+ *  the pane would have made. */
+export interface PreviewWriter {
+  write: (cid: string, values: Record<string, string>) => Promise<{ ok: boolean; error?: string; token?: string }>;
+  /** Best effort by contract: it answers what happened rather than throwing, because a record that
+   *  could not be removed is something the report must SAY, not something that takes the run down
+   *  after the page has already been judged. */
+  undo: (token: string) => Promise<{ ok: boolean; error?: string }>;
+}
+
+/** What the database said about one accepted confirmation, and what became of the record.
+ *
+ *  The answer this whole action was missing: everything else a headless run proves stops at the
+ *  parent, and the rules are the last judge nobody could ask without a person in front of a pane. */
+export interface HeadlessWrite {
+  cid: string;
+  /** The deployed rules accepted it. */
+  ok: boolean;
+  /** Why not — named by the host's vocabulary where it could name one, because the rules answer
+   *  "Missing or insufficient permissions" and nothing else. Empty when accepted. */
+  error: string;
+  /** What happened to the record afterwards.
+   *
+   *  `removed` is the ordinary path and it runs IMMEDIATELY, before the next press: a run that
+   *  swept up at the end would leave its own record in the way of the next press, and an app that
+   *  keys by `auth.uid` would then report its second button as refused by rules that were in fact
+   *  refusing a duplicate of ours.
+   *
+   *  `left` is the one that must never be silent — a booking left standing occupies a real slot. */
+  cleanup: "removed" | "left" | "not-written";
+  /** Why the record could not be taken back. Empty unless `cleanup` is `left`. */
+  cleanupError: string;
 }
 
 /** What one press produced. */
@@ -80,6 +124,19 @@ export interface HeadlessPress {
    *  the `submit` event never fires, so `preventDefault()` never runs — and neither can the author,
    *  unless they have the console open. */
   blockedFormSubmission: boolean;
+  /** The write the confirmation became, or null.
+   *
+   *  Null covers three different things and the report tells them apart from `submitted`: nothing
+   *  was submitted at all, the run had no writer, or the run's write budget was spent. */
+  write: HeadlessWrite | null;
+  /** The confirmation was DECLINED because this run had already accepted its budget's worth.
+   *
+   *  Its own flag rather than a null `write`, because "we chose not to ask" and "the page never
+   *  asked" are opposite findings about the button. */
+  writeSkipped: boolean;
+  /** What the page said about itself during this press, through the runtime's `notice` port.
+   *  PAGE-AUTHORED text — reported as the page's words, never as the host's. */
+  notices: { code: string; detail: string }[];
   errors: string[];
 }
 
@@ -103,6 +160,20 @@ export interface HeadlessPageReport {
   /** What is actually on the screen, trimmed. The single most useful line in the report — a page
    *  stuck on its loading state says so here in the author's own words. */
   text: string;
+  /** Where the picture of this page was written, or null when none was taken.
+   *
+   *  A PATH rather than the image, because what reads this report is an agent holding a tool
+   *  result: bytes would cost the whole context and a path costs a line, and the agent can open it
+   *  when the text gives it a reason to. This is the pane's last remaining advantage handed over —
+   *  a person looking at the screen — and it is the only way a run reports that the page drew
+   *  everything in the wrong place.
+   *
+   *  Null is not a failure of the page: see `screenshotError`. */
+  screenshot: string | null;
+  /** Why there is no picture. Empty when there is one, or when none was asked for. */
+  screenshotError: string;
+  /** What the page said about itself on load, before anything was pressed. */
+  notices: { code: string; detail: string }[];
   presses: HeadlessPress[];
   /** Controls this run did NOT press. Counted rather than inferred from `presses.length`: a page
    *  with exactly the budget's worth of controls and a page whose eleventh control was dropped
@@ -120,6 +191,16 @@ export type HeadlessRun =
        *  "ran 6 pages" reads as "ran the app" — and the seventh is then published having never
        *  been loaded, which is the exact failure this whole action exists to end. */
       omittedPages: number;
+      /** Confirmations this run DECLINED because its write budget was spent. Reported at the top,
+       *  where a reader deciding whether the app was exercised will see it. */
+      writesSkipped: number;
+      /** Where the pictures were written, when any were. Named once at the end so an agent has the
+       *  directory rather than only the files. */
+      screenshotDir: string | null;
+      /** Whether this run could write at all. False is every run driven by a test, and the report
+       *  must say so — a run that declined everything and a run that wrote and was accepted are
+       *  the same page with opposite conclusions. */
+      wrote: boolean;
     }
   | { ok: false; problems: string[] };
 
@@ -128,11 +209,16 @@ export type HeadlessRun =
  *  forty renders to say the same thing. What is dropped is REPORTED (see `narrate`), because a
  *  silent cap reads as "everything was covered".
  *
+ *  `writes` is the one that costs somebody ELSE. Every accepted confirmation is a real record in
+ *  the live database, removed again immediately — but removed by a best effort, and six pages of
+ *  six controls would be up to thirty-six of them. Four is enough to learn what the rules say,
+ *  which is one answer per declaration and not one per button.
+ *
  *  `readyMs` is the one that costs. It is only ever WAITED OUT by a page that will never answer,
  *  and a page that will answer does so in a few milliseconds — the handshake is two messages
  *  between a frame and its own parent. So it is short: it is paid once per mount by exactly the
  *  pages that are broken, and every mount of them. */
-export const LIMITS = { pages: 6, presses: 6, evaluateMs: 5000, readyMs: 2000, settleMs: 600, textChars: 400 } as const;
+export const LIMITS = { pages: 6, presses: 6, writes: 4, evaluateMs: 5000, readyMs: 2000, settleMs: 600, textChars: 400 } as const;
 
 /** The clickable things, in document order. `input[type=submit]` is in the list although the
  *  sandbox will never let one submit — that IS the finding, and a scan that skipped them would
@@ -309,6 +395,32 @@ const asSubmitted = (value: unknown): { cid: string; fields: string[] }[] =>
     ? value.flatMap((entry) => (isRecord(entry) && typeof entry.cid === "string" ? [{ cid: entry.cid, fields: asStrings(entry.fields) }] : []))
     : [];
 
+const asNotices = (value: unknown): { code: string; detail: string }[] =>
+  Array.isArray(value)
+    ? value.flatMap((entry) =>
+        isRecord(entry) && typeof entry.code === "string" && typeof entry.detail === "string" ? [{ code: entry.code, detail: entry.detail }] : [],
+      )
+    : [];
+
+const asWrites = (value: unknown): { cid: string; ok: boolean; error: string; token: string }[] =>
+  Array.isArray(value)
+    ? value.flatMap((entry) =>
+        isRecord(entry) && typeof entry.cid === "string"
+          ? [{ cid: entry.cid, ok: entry.ok === true, error: asString(entry.error), token: asString(entry.token) }]
+          : [],
+      )
+    : [];
+
+const NOTHING_OBSERVED: HarnessObservation = { readied: false, stateDelivered: false, submitted: [], refused: [], notices: [], writes: [] };
+
+/** A submission's values, as the harness hands them over. String-valued by construction on the
+ *  page's side, narrowed here for the same reason everything else crossing that boundary is: what
+ *  arrives is a value the BROWSER produced. A key whose value is not a string is dropped rather
+ *  than coerced — the write is judged by the deployed rules, and inventing a value for it would
+ *  make the verdict be about a record nobody wrote. */
+const asValues = (value: Record<string, unknown>): Record<string, string> =>
+  Object.fromEntries(Object.entries(value).flatMap(([key, entry]) => (typeof entry === "string" ? [[key, entry] as const] : [])));
+
 const asObservation = (value: unknown): HarnessObservation =>
   isRecord(value)
     ? {
@@ -316,8 +428,10 @@ const asObservation = (value: unknown): HarnessObservation =>
         stateDelivered: value.stateDelivered === true,
         submitted: asSubmitted(value.submitted),
         refused: asStrings(value.refused),
+        notices: asNotices(value.notices),
+        writes: asWrites(value.writes),
       }
-    : { readied: false, stateDelivered: false, submitted: [], refused: [] };
+    : NOTHING_OBSERVED;
 
 const BLOCKED_FORM = "Blocked form submission";
 
@@ -343,6 +457,12 @@ interface Driver {
   askFailures: () => string[];
   evaluate: (script: string, target?: Frame) => Promise<unknown>;
   decline: () => Promise<void>;
+  /** Answer the confirmation the way somebody who meant it would. Resolves only once the host's
+   *  writer has answered, so the verdict is in `observe().writes` by the time this returns. */
+  accept: () => Promise<void>;
+  /** Write a picture of the RENDERED DOCUMENT — not of the harness, whose chrome is nobody's
+   *  concern — and answer where it went, or why it could not be taken. */
+  screenshot: (file: string) => Promise<string>;
   /** Something this document was asked ran out of time. Cleared by `mount` — so a caller that
    *  mounts more than once (`reportPage` does, once per press) has to accumulate it. */
   stalled: () => boolean;
@@ -410,8 +530,47 @@ async function openHarness(page: Page, origin: string): Promise<void> {
   throw new Error(`the harness page at ${origin} would not load (${messageOf(last)}; ${reachable})`);
 }
 
-async function openDriver(browser: Browser, origin: string): Promise<Driver> {
+/** Write a picture of the rendered document, and answer what went wrong or an empty string.
+ *
+ *  The BYTES come back and this writes them, rather than handing puppeteer a path: its `path`
+ *  option is typed as a `.png`/`.jpeg` template literal, and satisfying that from a value built at
+ *  runtime needs an assertion — a promise to the compiler about a string this module composed, for
+ *  no gain over writing the file itself.
+ *
+ *  Bounded like every other question put to the browser: a page holding its own thread would hold
+ *  this too, and a picture is a diagnostic — it must never be the reason a run does not come back. */
+async function photograph(page: Page, file: string): Promise<string> {
+  const element = await page.$("iframe");
+  if (element === null) return "there was no rendered document to photograph";
+  const taken = await withDeadline(
+    element
+      .screenshot()
+      .then(async (bytes) => {
+        await writeFile(file, bytes);
+        return "";
+      })
+      .catch((err: unknown) => `the picture could not be taken: ${messageOf(err)}`),
+    LIMITS.evaluateMs,
+  );
+  return taken === TIMED_OUT ? "the picture could not be taken: the page did not settle in time" : taken;
+}
+
+async function openDriver(browser: Browser, origin: string, writer: PreviewWriter | null): Promise<Driver> {
   const page = await browser.newPage();
+  if (writer !== null) {
+    // THE ONE THING THE HARNESS CANNOT DO FOR ITSELF. Everything else it needs is served over
+    // loopback as a module; a write has to reach back into this process, and `exposeFunction` is
+    // the browser's own seam for that. Named on `window` so the harness can ask whether it exists
+    // rather than being told — a run without a writer must behave as if this line never ran.
+    //
+    // It NEVER throws into the page. A rejected exposed function surfaces inside the frame's realm
+    // as an error the author's page did not cause, and would be collected and reported as theirs.
+    await page.exposeFunction("__previewWrite", (cid: unknown, values: unknown) =>
+      writer
+        .write(typeof cid === "string" ? cid : "", isRecord(values) ? asValues(values) : {})
+        .catch((err: unknown) => ({ ok: false, error: messageOf(err) })),
+    );
+  }
   let noise: string[] = [];
   let askFailures: string[] = [];
   page.on("console", (message) => noise.push(message.text()));
@@ -464,6 +623,12 @@ async function openDriver(browser: Browser, origin: string): Promise<Driver> {
     decline: async () => {
       await evaluate("window.__preview.decline()");
     },
+    // Awaited inside the page: `accept()` there returns the bridge's promise, so this resolves
+    // once the write has answered rather than once it has been started.
+    accept: async () => {
+      await evaluate("window.__preview.accept()");
+    },
+    screenshot: (file) => photograph(page, file),
     mount: async (input) => {
       noise = [];
       askFailures = [];
@@ -495,7 +660,61 @@ interface PressResult {
   controls: number;
 }
 
-async function pressOne(driver: Driver, input: HeadlessPageInput, index: number): Promise<PressResult | null> {
+/** How the run answers a confirmation, and what it has left to spend.
+ *
+ *  Threaded rather than held in a module-level counter: two runs in one process would share one,
+ *  and shared-app operations serialise per REPOSITORY, so two of them at once is ordinary. */
+interface WriteBudget {
+  writer: PreviewWriter | null;
+  left: number;
+  skipped: number;
+  /** Tokens for records this run made and has NOT yet decided the fate of.
+   *
+   *  A record is added the moment the write answers and removed the moment its undo has been
+   *  ATTEMPTED — whether or not the attempt worked, because a failure is reported on the press that
+   *  made it and retrying it in the sweep would contradict that line.
+   *
+   *  So what is left in here at the end is only the crash path: the run threw, or the browser died,
+   *  between a successful write and the undo that follows it. Without this, that record is one
+   *  nothing in the world knows about — not the report, which never got written, and not the author.
+   *  With it, the sweep in `runPagesHeadless` gets one more chance at it. */
+  outstanding: Set<string>;
+}
+
+/** Answer the confirmation, and take the record straight back.
+ *
+ *  IMMEDIATELY, not at the end of the run. Every press mounts a fresh page, so a record left
+ *  standing is in the way of the next press — and an app whose id comes from `auth.uid` would then
+ *  refuse its second button with a rules error that is entirely our own doing. Cleaning up between
+ *  presses is what makes each press's verdict about the page rather than about the run.
+ *
+ *  It answers `null` when nothing was accepted, so a caller can tell "the run chose not to ask"
+ *  from "the page never asked" — those are opposite findings about a button. */
+async function acceptOne(driver: Driver, budget: WriteBudget, before: number): Promise<HeadlessWrite | null> {
+  const { writer } = budget;
+  if (writer === null) return null;
+  await driver.accept();
+  const verdict = (await driver.observe()).writes[before];
+  // The parent raised a confirmation and the writer was never reached — the page withdrew it, or
+  // the bridge was already sending. Nothing was written, so there is nothing to report or remove.
+  if (verdict === undefined) return null;
+  if (!verdict.ok) return { cid: verdict.cid, ok: false, error: verdict.error, cleanup: "not-written", cleanupError: "" };
+  budget.outstanding.add(verdict.token);
+  if (verdict.token === "") {
+    // Accepted, and nothing to undo it with. Said rather than swallowed: the record is real and
+    // this run cannot remove it, which is precisely the case an author must be told about.
+    budget.outstanding.delete(verdict.token);
+    return { cid: verdict.cid, ok: true, error: "", cleanup: "left", cleanupError: "the write came back with no token to take it back with" };
+  }
+  const undone = await writer.undo(verdict.token).catch((err: unknown) => ({ ok: false, error: messageOf(err) }));
+  // Attempted, so the sweep is not this record's business either way: it succeeded, or the press
+  // below says it did not.
+  budget.outstanding.delete(verdict.token);
+  if (undone.ok) return { cid: verdict.cid, ok: true, error: "", cleanup: "removed", cleanupError: "" };
+  return { cid: verdict.cid, ok: true, error: "", cleanup: "left", cleanupError: undone.error ?? "the record could not be removed" };
+}
+
+async function pressOne(driver: Driver, input: HeadlessPageInput, index: number, budget: WriteBudget): Promise<PressResult | null> {
   await driver.mount(input);
   const frame = driver.frame();
   if (frame === null) return null;
@@ -519,6 +738,9 @@ async function pressOne(driver: Driver, input: HeadlessPageInput, index: number)
       submitted: null,
       refused: [],
       blockedFormSubmission: false,
+      write: null,
+      writeSkipped: false,
+      notices: [],
       errors: [...new Set(driver.askFailures())],
     };
     return { press: gone, controls: labels.length };
@@ -550,16 +772,36 @@ async function pressOne(driver: Driver, input: HeadlessPageInput, index: number)
     .catch(() => true);
   await new Promise((resolve) => setTimeout(resolve, LIMITS.settleMs));
   const after = await driver.observe();
-  // Answered the way somebody who changed their mind would, so the page's own "cancelled" path
-  // runs and nothing is left waiting on a promise that never settles.
-  await driver.decline();
+  const submitted = after.submitted[before.submitted.length] ?? null;
+  // ACCEPT WHEN THERE IS SOMETHING TO ACCEPT AND SOMETHING LEFT TO SPEND, otherwise answer the way
+  // somebody who changed their mind would — so the page's own "cancelled" path runs and nothing is
+  // left waiting on a promise that never settles. A press that raised no confirmation is declined
+  // too: `decline()` on a bridge with nothing pending is a no-op, and asking first would be a
+  // second round trip to learn what `after` already says.
+  const wanted = submitted !== null && budget.writer !== null;
+  const affordable = wanted && budget.left > 0;
+  let write: HeadlessWrite | null = null;
+  if (affordable) {
+    budget.left -= 1;
+    write = await acceptOne(driver, budget, before.writes.length);
+  }
+  if (!affordable) {
+    if (wanted) budget.skipped += 1;
+    await driver.decline();
+  }
+  // Read AFTER the accept: the write is where a page's own error handler runs, and a notice raised
+  // there is the most useful one on the page.
+  const finished = write === null ? after : await driver.observe();
   const noise = driver.noise().slice(noiseBefore);
   const press: HeadlessPress = {
     label,
     notClickable: notClickable !== false,
-    submitted: after.submitted[before.submitted.length] ?? null,
-    refused: after.refused.slice(before.refused.length),
+    submitted,
+    refused: finished.refused.slice(before.refused.length),
     blockedFormSubmission: noise.some((line) => line.includes(BLOCKED_FORM)),
+    write,
+    writeSkipped: wanted && !affordable,
+    notices: finished.notices.slice(before.notices.length),
     // The page's own words from the press window, PLUS every question of ours this mount broke —
     // `FILL_INPUTS` and `LABELS` are put before the window opens, so their failures are not in the
     // slice, and losing them here is how a page that answered nothing is reported as a page that
@@ -569,10 +811,14 @@ async function pressOne(driver: Driver, input: HeadlessPageInput, index: number)
   return { press, controls: labels.length };
 }
 
-async function reportPage(driver: Driver, input: HeadlessPageInput): Promise<HeadlessPageReport> {
+async function reportPage(driver: Driver, input: HeadlessPageInput, budget: WriteBudget, shot: string | null): Promise<HeadlessPageReport> {
   await driver.mount(input);
   const observed = await driver.observe();
   const frame = driver.frame();
+  // BEFORE anything is filled in or pressed, because that is the page a visitor first meets — and
+  // because a picture taken after a press would be of whichever control happened to be last, which
+  // represents nothing.
+  const screenshotError = shot === null ? "" : await driver.screenshot(shot);
   const liveForms = frame === null ? 0 : asNumber(await driver.evaluate(`document.querySelectorAll("form").length`, frame));
   const text =
     frame === null ? "" : asString(await driver.evaluate(`(document.body.innerText || "").replace(/\\s+/g, " ").trim().slice(0, ${LIMITS.textChars})`, frame));
@@ -602,7 +848,7 @@ async function reportPage(driver: Driver, input: HeadlessPageInput): Promise<Hea
   const presses: HeadlessPress[] = [];
   let controls = labels.length;
   for (let index = 0; index < Math.min(controls, LIMITS.presses); index += 1) {
-    const result = await pressOne(driver, input, index);
+    const result = await pressOne(driver, input, index, budget);
     unresponsive = unresponsive || driver.stalled();
     if (result === null) break;
     presses.push(result.press);
@@ -617,15 +863,44 @@ async function reportPage(driver: Driver, input: HeadlessPageInput): Promise<Hea
     submittedOnLoad: observed.submitted.length,
     liveForms,
     text,
+    screenshot: shot === null || screenshotError !== "" ? null : shot,
+    screenshotError,
+    notices: observed.notices,
     presses,
     pressesOmitted: Math.max(0, controls - presses.length),
     errors,
   };
 }
 
+/** Somewhere to put the pictures, outside the author's repository.
+ *
+ *  The temp directory and never the working tree: a preview must leave nothing behind for a commit
+ *  to pick up, and an author who ran it twice would otherwise be looking at a diff of screenshots.
+ *  It is not cleaned up — the whole point is that an agent opens the files AFTER the tool call has
+ *  returned, so removing them at the end of the run would remove them before they were read. The OS
+ *  clears the directory on its own schedule, which is the right owner for a file nobody keeps. */
+async function screenshotDir(): Promise<string | null> {
+  try {
+    return await mkdtemp(path.join(tmpdir(), "mulmoterminal-preview-"));
+  } catch {
+    // A run without pictures is still a run. Reported by the pages' own `screenshotError`, so the
+    // reader learns the reason rather than finding the field missing.
+    return null;
+  }
+}
+
+/** A file name a directory listing can be read: the audience, the page, and nothing a page id
+ *  could smuggle in. */
+const shotName = (input: HeadlessPageInput, index: number): string =>
+  `${index + 1}-${input.audience}-${input.id.replace(/[^a-zA-Z0-9._-]/gu, "_")}.png`.slice(0, 120);
+
 /** Run the pages. Separated from the Firestore half below so a test can drive it with a page it
- *  wrote by hand — no app, no session, no database. */
-export async function runPagesHeadless(pages: readonly HeadlessPageInput[]): Promise<HeadlessRun> {
+ *  wrote by hand — no app, no session, no database.
+ *
+ *  `writer` is what decides whether a confirmation is accepted. Null — the default, and what every
+ *  test passes — declines them all, exactly as this whole action did before
+ *  `plans/feat-headless-preview-parity.md`. */
+export async function runPagesHeadless(pages: readonly HeadlessPageInput[], writer: PreviewWriter | null = null): Promise<HeadlessRun> {
   const started = await browserOrProblem();
   if (!started.ok) return started;
   const { browser } = started;
@@ -635,21 +910,70 @@ export async function runPagesHeadless(pages: readonly HeadlessPageInput[]): Pro
   // has to come back as an answer for the same reason everything else here does: the caller is a
   // tool call whose contract is prose, not an exception.
   let harness: { origin: string; close: () => Promise<void> } | null = null;
+  // Declared out here so the sweep below can reach it on the path where the run threw — which is
+  // the only path the sweep exists for.
+  let budget: WriteBudget | null = null;
   try {
     harness = await serveHarness();
-    const driver = await openDriver(browser, harness.origin);
+    const driver = await openDriver(browser, harness.origin, writer);
+    const dir = await screenshotDir();
+    budget = { writer, left: LIMITS.writes, skipped: 0, outstanding: new Set() };
     const reports: HeadlessPageReport[] = [];
-    for (const input of pages.slice(0, LIMITS.pages)) {
-      reports.push(await reportPage(driver, input));
+    for (const [index, input] of pages.slice(0, LIMITS.pages).entries()) {
+      reports.push(await reportPage(driver, input, budget, dir === null ? null : path.join(dir, shotName(input, index))));
     }
-    return { ok: true, pages: reports, omittedPages: Math.max(0, pages.length - LIMITS.pages) };
+    return {
+      ok: true,
+      pages: reports,
+      omittedPages: Math.max(0, pages.length - LIMITS.pages),
+      writesSkipped: budget.skipped,
+      screenshotDir: reports.some((report) => report.screenshot !== null) ? dir : null,
+      wrote: writer !== null,
+    };
   } catch (err) {
     return { ok: false, problems: [`The headless preview could not be run: ${messageOf(err)}`] };
   } finally {
+    await sweep(budget);
     await harness?.close();
     await browser.close();
   }
 }
+
+/** One more attempt at anything this run wrote and never decided the fate of.
+ *
+ *  Reached only when the run threw between a write and its undo. It reports nothing, and that is
+ *  not an oversight: there is no report on that path — the caller is getting a failure — and a
+ *  record removed here is a record nobody needs to hear about. What it buys is that the failure
+ *  does not also leave a booking standing in somebody's app.
+ *
+ *  Its own errors are swallowed for the same reason: it runs inside a `finally` that is already
+ *  carrying a failure, and throwing here would replace the reason the run died with the reason
+ *  the cleanup did. */
+async function sweep(budget: WriteBudget | null): Promise<void> {
+  if (budget === null || budget.writer === null) return;
+  for (const token of budget.outstanding) {
+    await budget.writer.undo(token).catch(() => undefined);
+  }
+  budget.outstanding.clear();
+}
+
+/** The writer this repository's app gets: the pane's own two functions, nothing wrapped around
+ *  them.
+ *
+ *  `writePreviewSubmission` is reached DIRECTLY rather than through `/api/shared-app/preview/submit`,
+ *  which is how the pane reaches it. Not because the route is wrong — because it is a route: HTTP,
+ *  JSON and a session, for a call this process is already inside. The verdict comes from the same
+ *  place either way, which is the only thing parity asks for. */
+const repositoryWriter = (root: string): PreviewWriter => ({
+  write: async (cid, values) => {
+    const result = await writePreviewSubmission(root, cid, values);
+    return result.ok ? { ok: true, token: result.written.token } : { ok: false, error: result.error };
+  },
+  undo: async (token) => {
+    const result = await undoPreviewSubmission(token);
+    return result.ok ? { ok: true } : { ok: false, error: result.error };
+  },
+});
 
 /** The whole action: work out what this repository would publish, then run it.
  *
@@ -676,5 +1000,5 @@ export async function headlessPreview(root: string): Promise<HeadlessRun> {
     ...(page.viewer === undefined ? {} : { viewer: page.viewer }),
     submit: Object.keys(preview.submit).length > 0 ? preview.submit : null,
   }));
-  return runPagesHeadless(inputs);
+  return runPagesHeadless(inputs, repositoryWriter(root));
 }

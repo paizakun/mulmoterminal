@@ -14,12 +14,18 @@
 // alternative — a bundler step, or hand-copying the functions into this string — would make what
 // runs here a copy that can drift silently.
 //
-// NOTHING IS EVER ACCEPTED. `submit` refuses, and every confirmation the bridge raises is
-// DECLINED. A headless run is started by an agent rather than by a person, and the pane's own
-// accept path writes a real record to the live database as the author — which is fine when
-// somebody pressed the button and is not fine when a tool call did. What this proves is that the
-// submission REACHED the parent, correctly formed and correctly addressed; whether the rules would
-// accept it is the pane's question, and it is asked by a person.
+// WHETHER IT ACCEPTS IS THE HOST'S TO DECIDE, and this module does not decide it. `submit` calls
+// `window.__previewWrite` when the host has exposed one, and refuses when it has not — so a run
+// driven by a test, with no app and no database behind it, behaves exactly as this harness always
+// did, and a run driven by `manageSharedApp` writes through the same function the pane's own
+// accept path calls.
+//
+// It used to refuse unconditionally, and the reason was real while it lasted: before staging was
+// removed an app had no `apps/{aid}` until it was deployed, so a confirmation accepted here was
+// refused by the rules anyway. Since #1760 an app can be written to from the moment it is
+// declared, and the only thing left in the way was a policy whose cost was that the run could
+// never bring back the one answer an author most wants before publishing — what the DEPLOYED
+// rules say. See `plans/feat-headless-preview-parity.md`.
 //
 // Design: `plans/feat-shared-app-preview.md` section 7 (P5).
 
@@ -41,6 +47,15 @@ export interface HarnessObservation {
    *  `not-a-submission`, `busy`. These are the answers an author cannot see in the browser,
    *  because the page gets them as a rejected promise it usually does not await. */
   refused: string[];
+  /** What the PAGE said about itself, through the runtime's `notice` port: an uncaught error, a
+   *  promise it rejected and never handled, a modal the sandbox ignored. The pane has always taken
+   *  these and this harness dropped them, which is the parity gap that made a page reporting its
+   *  own crash look like a page that simply drew nothing. `detail` is PAGE-AUTHORED — see
+   *  `ViewNotice` — so it is carried as the page's words and reported as such. */
+  notices: { code: string; detail: string }[];
+  /** The verdicts the host's own writer gave, in the order the confirmations were accepted. Empty
+   *  when nothing was accepted, which is every run without a writer. */
+  writes: { cid: string; ok: boolean; error: string; token: string }[];
 }
 
 /** The harness document. A constant rather than a file on disk: it is served from memory to a
@@ -65,6 +80,8 @@ let viewer = null;
 let nonce = viewNonce();
 let outbound = [];
 let submitted = [];
+let notices = [];
+let writes = [];
 
 // The cells the bridge writes into. Plain objects with a \`value\`, which is all \`Signal<T>\` asks
 // for — the package holds no framework precisely so a host can supply its own, and a recorder's
@@ -96,14 +113,20 @@ const recording = (make) => () => {
   };
 };
 
-/** The member's parent, for a roster or participant page. It performs nothing — a headless run
- *  never writes — so every intent is refused BY NAME on the channel, which the report reads back
- *  out of \`outbound\`. */
+/** The member's parent, for a roster or participant page. It performs nothing — a transition, an
+ *  assignment or a withdrawal is a real write against the live rules and neither this harness nor
+ *  the PANE has a route for one — so every intent is refused BY NAME on the channel, which the
+ *  report reads back out of \`outbound\`. That refusal is parity, not a shortfall: the pane refuses
+ *  them too, for the same reason and in the same words. */
 const member = memberBridge(
   {
     channel: recording(() => portChannel(frame)),
     state: () => datasets,
     viewer: () => viewer ?? { me: null, can: {} },
+    // The page's own account of itself, which the pane has always taken and this harness dropped.
+    // A page that crashes reports it HERE and nowhere else the run can see — dropped, it read as a
+    // page that simply drew nothing.
+    notice: (report) => notices.push({ code: String(report.code), detail: String(report.detail) }),
     // THE SAME CELL the public parent writes, because \`observe()\` reads one and the report puts
     // "It NEVER answered the handshake" at the top of a page whose value is false — over a
     // paragraph saying nothing below describes the page's behaviour. Wired to the public bridge
@@ -119,10 +142,29 @@ const bridge = viewBridge(
     // they are answered on the port and never drawn, which is exactly why an author watching the
     // screen cannot see them.
     channel: recording(() => portChannel(frame)),
-    // Never reached: every confirmation is declined. Here so that a change which starts accepting
-    // has to delete this sentence first.
-    submit: async () => ({ ok: false, error: "a headless preview never writes" }),
+    // THE HOST'S WRITER, or a refusal when there is none.
+    //
+    // \`__previewWrite\` is exposed by the Node side and lands in \`writePreviewSubmission\` — the
+    // same function the pane's own accept path reaches through its HTTP route. A run with no
+    // writer (every test, and any caller that asks for none) refuses exactly as this harness
+    // always did, so the page sees a decision and never a hang.
+    submit: async (pending) => {
+      if (typeof window.__previewWrite !== "function") return { ok: false, error: "a headless preview never writes" };
+      // The verdict is recorded BEFORE it is returned, because the page is entitled to ignore the
+      // answer — and what the report needs is what the DATABASE said, not what the page did with
+      // it. \`token\` is what takes the record back; empty when the write was refused.
+      const answer = await window.__previewWrite(pending.cid, pending.values);
+      const verdict = {
+        cid: pending.cid,
+        ok: answer !== null && answer !== undefined && answer.ok === true,
+        error: answer !== null && answer !== undefined && typeof answer.error === "string" ? answer.error : "",
+        token: answer !== null && answer !== undefined && typeof answer.token === "string" ? answer.token : "",
+      };
+      writes.push(verdict);
+      return verdict.ok ? { ok: true } : { ok: false, error: verdict.error };
+    },
     state: () => datasets,
+    notice: (report) => notices.push({ code: String(report.code), detail: String(report.detail) }),
   },
   () => config,
   () => nonce,
@@ -150,6 +192,8 @@ window.__preview = {
     member.forget();
     outbound = [];
     submitted = [];
+    notices = [];
+    writes = [];
     datasets = page.datasets;
     viewer = page.viewer ?? null;
     config = page.submit === null ? null : { submit: page.submit };
@@ -169,12 +213,24 @@ window.__preview = {
     return loaded;
   },
   observe() {
-    return { readied: cells.readied.value, stateDelivered: outbound.some((message) => message.type === VIEW_MESSAGE.state), submitted, refused: refusals() };
+    return {
+      readied: cells.readied.value,
+      stateDelivered: outbound.some((message) => message.type === VIEW_MESSAGE.state),
+      submitted,
+      refused: refusals(),
+      notices,
+      writes,
+    };
   },
-  /** Answer the confirmation the way a visitor who changed their mind would. Never accept —
-   *  see the note at the top of this module. */
+  /** Answer the confirmation the way a visitor who changed their mind would. */
   decline() {
     bridge.decline();
+  },
+  /** Answer it the way somebody who meant it would: the parent calls \`submit\` above, which is the
+   *  host's writer or a refusal. Awaited, so the verdict is in \`writes\` by the time the caller
+   *  observes — \`accept()\` resolves only after the write has answered. */
+  async accept() {
+    await bridge.accept();
   },
 };
 </script>

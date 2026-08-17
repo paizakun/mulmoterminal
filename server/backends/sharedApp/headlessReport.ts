@@ -13,7 +13,7 @@
 // rather than something a good run can omit.
 import { explainRefusal, FORM_BLOCKED, quoteForReport, READY_DEADLOCK } from "../../../common/sharedAppViewVocabulary.js";
 import type { PreviewAudience } from "../../../common/sharedAppPreview.js";
-import type { HeadlessPageReport, HeadlessPress, HeadlessRun } from "./headlessPreview.js";
+import { LIMITS, type HeadlessPageReport, type HeadlessPress, type HeadlessRun, type HeadlessWrite } from "./headlessPreview.js";
 
 /** What this run does NOT do to a page written for the roster.
  *
@@ -23,14 +23,56 @@ import type { HeadlessPageReport, HeadlessPress, HeadlessRun } from "./headlessP
  *  `@receptron/sharedapp/view`, the same one mulmoserver puts in front of `/m/` and `/p/`, and it
  *  carries the capabilities this author resolves to.
  *
- *  What is left is the writes. An intent is REFUSED here by name rather than performed, because a
- *  headless run never writes — so a button is proven to exist, to be reachable and to ask for the
- *  right thing, and not to succeed. The refusal is reported like any other, which is the
- *  difference from before: an untested control now says so in its own line. */
+ *  What is left is the member's INTENTS, and this is now the one place a headless run does less
+ *  than a live page rather than less than the pane — the pane refuses them too, for the same
+ *  reason: neither host has a route for a transition, an assignment or a withdrawal. So a button
+ *  is proven to exist, to be reachable and to ask for the right thing, and not to succeed. The
+ *  refusal is reported like any other, so an untested control says so in its own line. */
 const MEMBER_PAGE_LIMIT =
-  "This page is written for the roster. It gets the same `viewer` capabilities the live page would, from the same parent — but a headless run never writes, so " +
-  "`transition`, `assign` and `withdraw` are REFUSED rather than performed. A control that asks for one is reported below as refused, which says it is wired; whether " +
-  "the rules would accept the write is not tested here.";
+  "This page is written for the roster. It gets the same `viewer` capabilities the live page would, from the same parent — but a member's intent is REFUSED rather " +
+  "than performed: `transition`, `assign` and `withdraw` are real writes against the live rules and neither this run nor the Collections pane has a route for one. " +
+  "A control that asks for one is reported below as refused, which says it is wired; whether the rules would accept it is not tested here or there.";
+
+/** The page's own account of itself, in the page's own words.
+ *
+ *  Marked as the PAGE's, every time, because `detail` is whatever the document threw — an author
+ *  can write anything into an `Error` — and a reader who takes it for the host's word is being
+ *  told something by a string this repository did not compose. `ViewNotice` says the same in the
+ *  package: what is safe to show is a question about the reader, and here the reader is the author
+ *  of the page it came from. */
+function noticeLines(notices: readonly { code: string; detail: string }[], indent: string): string[] {
+  if (notices.length === 0) return [];
+  const said = notices.map((notice) => (notice.detail === "" ? notice.code : `${notice.code} — ${quoted(notice.detail)}`));
+  return [`${indent}The PAGE reported about itself: ${said.join("; ")}. (Those words are the page's, not this report's.)`];
+}
+
+/** What the deployed rules said, and what became of the record.
+ *
+ *  The one thing no preview could answer until now, and the reason the closing lines below had to
+ *  change: a run that declines every confirmation proves the submission reached the parent and
+ *  stops there. Both halves are always said — an accepted write that could not be taken back is a
+ *  real record standing in a real app, and a report that mentioned only the acceptance would read
+ *  as a clean run. */
+const refusalDetail = (error: string): string => (error === "" ? "." : `: ${error}.`);
+
+function writeLines(write: HeadlessWrite): string[] {
+  if (!write.ok) {
+    return [
+      `    The write was REFUSED by the deployed rules for '${write.cid}'${refusalDetail(write.error)}`,
+      "    That is the answer this run exists to bring back — a visitor pressing this button gets the same refusal, and the page cannot see why.",
+    ];
+  }
+  const kept =
+    write.cleanup === "removed"
+      ? "It was REMOVED again immediately, so nothing of it is left."
+      : `It could NOT be removed (${write.cleanupError}) — the record is still there. Take it out by hand before publishing, or it occupies a real place in the app.`;
+  return [`    The deployed rules ACCEPTED the write to '${write.cid}'. ${kept}`];
+}
+
+/** A confirmation this run chose not to accept. Its own line, because a null write and a declined
+ *  one are opposite findings about a button, and silence here would read as the first. */
+const SKIPPED_WRITE =
+  "    It was DECLINED rather than written: this run had already spent its budget of real writes. The submission is wired; what the rules would say about THIS one was not asked.";
 
 const quoted = quoteForReport;
 
@@ -92,8 +134,20 @@ function pressNotes(press: HeadlessPress, audience: PreviewAudience): string[] {
       ? ["    The browser BLOCKED a form submission on this press — the `submit` event never fired, so no handler of the page's ran."]
       : []),
     ...refusalLine(press, audience),
+    ...noticeLines(press.notices, "    "),
     ...(press.errors.length === 0 ? [] : [`    It also raised: ${press.errors.join(" / ")}`]),
   ];
+}
+
+/** What the confirmation became. Three outcomes and each is its own finding: the rules answered,
+ *  the run chose not to ask, or there was no writer at all. */
+function outcomeLines(press: HeadlessPress): string[] {
+  if (press.write !== null) return writeLines(press.write);
+  if (press.writeSkipped) return [SKIPPED_WRITE];
+  // WITHOUT saying why. The reason belongs to the run, not to this press — the closing lines say
+  // whether the run had a writer at all — and a press-level guess would contradict them on the
+  // path where a confirmation was withdrawn before the writer was reached.
+  return ["    It was DECLINED, so nothing of it reached the database."];
 }
 
 function pressLine(press: HeadlessPress, audience: PreviewAudience): string[] {
@@ -107,10 +161,7 @@ function pressLine(press: HeadlessPress, audience: PreviewAudience): string[] {
   }
   if (press.submitted !== null) {
     const fields = press.submitted.fields.length === 0 ? "no fields" : press.submitted.fields.join(", ");
-    return [
-      `  ${head}a submission reached the parent for '${press.submitted.cid}' carrying ${fields}. It was DECLINED — a headless run never writes.`,
-      ...notes,
-    ];
+    return [`  ${head}a submission reached the parent for '${press.submitted.cid}' carrying ${fields}.`, ...outcomeLines(press), ...notes];
   }
   if (press.refused.length > 0 || press.blockedFormSubmission) {
     return [
@@ -137,6 +188,11 @@ function pageLines(page: HeadlessPageReport): string[] {
     ...onLoadLine(page).map((line) => `  ${line}`),
     ...formLine(page).map((line) => `  ${line}`),
     page.text === "" ? "  Nothing was drawn: the page put no text on the screen at all." : `  On screen: ${quoted(page.text)}`,
+    ...(page.screenshot === null
+      ? []
+      : [`  A picture of it, as a visitor first meets it: ${page.screenshot} — open it if the words above leave anything in doubt.`]),
+    ...(page.screenshotError === "" ? [] : [`  No picture was taken: ${page.screenshotError}. That is about this run, not about the page.`]),
+    ...noticeLines(page.notices, "  "),
     ...(page.presses.length === 0
       ? ["  No button or clickable control was found on this page."]
       : page.presses.flatMap((press) => pressLine(press, page.audience))),
@@ -147,13 +203,49 @@ function pageLines(page: HeadlessPageReport): string[] {
 
 /** The fixed close. Not omitted on a clean run, and not softened: the run proves the drawing and
  *  the wiring, and the four things it hides are the ones that only appear after publishing. */
-const CLOSING = [
-  "",
-  "Nothing was written: every confirmation was declined, so no record reached the database.",
-  "This does NOT prove the app is ready to publish. It says nothing about whether the deployed rules would accept a write, about other people's devices, " +
-    "about two people submitting at once, or about whether the rules are deployed at all. For the write, ask the user to press Preview in the Collections pane — " +
-    "that one accepts, as them, against the real rules.",
-];
+const STILL_UNKNOWN =
+  "This does NOT prove the app is ready to publish. It says nothing about other people's devices, about two people submitting at once, or about anything a " +
+  "collection this run did not reach would do. What it does now answer is the rules — every accepted confirmation above was a real write, judged by the rules " +
+  "as they are deployed, and taken back again.";
+
+/** The fixed close, in the two shapes a run can have.
+ *
+ *  It is not omitted on a clean run and not softened, for the reason it always had: what a run
+ *  proves and what it leaves unknown are both facts about every run, and a report that states them
+ *  only when something went wrong teaches a reader to read silence as safety.
+ *
+ *  What CHANGED is that "nothing was written" is no longer true of every run
+ *  (`plans/feat-headless-preview-parity.md`), and a fixed line that has become false is worse than
+ *  no line — so the two cases are said apart, and the list of what is still unknown lost exactly
+ *  the one entry the writes now cover. */
+function closing(run: { wrote: boolean; writesSkipped: number; screenshotDir: string | null }): string[] {
+  const skipped =
+    run.writesSkipped === 0
+      ? []
+      : [
+          `${run.writesSkipped} further confirmation${run.writesSkipped === 1 ? " was" : "s were"} DECLINED rather than written — this run stops after ${LIMITS.writes} real writes. ` +
+            "Those buttons are wired; what the rules would say about them was not asked.",
+        ];
+  const pictures =
+    run.screenshotDir === null ? [] : [`The pictures are in ${run.screenshotDir}. Nothing removes them — they outlive this call so they can be opened.`];
+  if (!run.wrote) {
+    return [
+      "",
+      "Nothing was written: this run was given no way to write, so every confirmation was declined.",
+      ...pictures,
+      "This does NOT prove the app is ready to publish. It says nothing about whether the deployed rules would accept a write, about other people's devices, " +
+        "about two people submitting at once, or about whether the rules are deployed at all.",
+    ];
+  }
+  return [
+    "",
+    "Every confirmation above was ACCEPTED and written to the real database as you, then removed again immediately. Any record this run could not remove is named " +
+      "on the press that made it — there are no others.",
+    ...skipped,
+    ...pictures,
+    STILL_UNKNOWN,
+  ];
+}
 
 export function narrateHeadlessRun(run: HeadlessRun): string {
   if (!run.ok) return run.problems.join("\n");
@@ -164,6 +256,6 @@ export function narrateHeadlessRun(run: HeadlessRun): string {
   return [
     `Ran ${count} page${count === 1 ? "" : "s"} in a real browser, in the same sandbox and CSP a visitor gets.${omitted}`,
     ...run.pages.flatMap(pageLines),
-    ...CLOSING,
+    ...closing(run),
   ].join("\n");
 }

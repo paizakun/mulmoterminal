@@ -1,7 +1,8 @@
 # staging を廃止し、「作った時点で在る」「publish で見える」の 2 状態にする
 
 **状態**: 実装済み（2026-08-16〜17）。sharedapp 0.8.0 公開済み・mulmoserver は receptron/mulmoserver#190、
-MulmoTerminal は #1760。P6（ヘッドレスのパリティ）だけが未着手
+MulmoTerminal は #1760。P6（ヘッドレスのパリティ）は
+[`plans/feat-headless-preview-parity.md`](./feat-headless-preview-parity.md) で実装済み
 **日付**: 2026-08-16
 **実装先**: `@receptron/sharedapp`（npm）・`../mulmoserver`（ルール／ルート／ビュー）・MulmoTerminal（ツール／スキル）
 **前提**: [`docs/shared-app-principles.md`](../docs/shared-app-principles.md)（原則 8・9 を書き換える）、
@@ -111,8 +112,11 @@ publish は working tree を読む。代わりに立つのは **preview**（`pla
 
 **D3. プレビューからの書き込み。** ペインのプレビュー（人が承諾を押す）は init の直後から通る —
 `apps/{aid}` が在るので rules が所有者を解決でき、著者としての create が受理される。これが要件 2 の
-実体である。**ツールの `action: "preview"` は従来どおり書かない**（全確認を `decline()`）。理由は
-staging とは無関係で、「ツール呼び出しは人ではない」まま変わらない。
+実体である。**ツールの `action: "preview"` はこの計画の時点では書かない**（全確認を `decline()`）。
+
+> **2026-08-17 追記**: これは P6 で覆した。書かない理由として挙げていた「ツール呼び出しは人では
+> ない」は、書いた記録を**その押下の直後に消す**なら成立しない — 残るのは判定だけになる。
+> [`plans/feat-headless-preview-parity.md`](./feat-headless-preview-parity.md) が実装。
 
 ## 5b. P6 — ヘッドレスプレビューをペインと同一にする（2026-08-16 決定）
 

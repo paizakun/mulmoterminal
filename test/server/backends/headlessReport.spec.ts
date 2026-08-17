@@ -7,8 +7,10 @@
 // with it — and the words are what the agent acts on. A page that never answered the handshake is
 // only useful if the report says which line of the author's page to move.
 import { describe, expect, it } from "vitest";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { narrateHeadlessRun } from "../../../server/backends/sharedApp/headlessReport.js";
-import type { HeadlessPageReport, HeadlessPress } from "../../../server/backends/sharedApp/headlessPreview.js";
+import type { HeadlessPageReport, HeadlessPress, HeadlessRun, HeadlessWrite } from "../../../server/backends/sharedApp/headlessPreview.js";
 
 const press = (over: Partial<HeadlessPress> = {}): HeadlessPress => ({
   label: "Order",
@@ -16,6 +18,9 @@ const press = (over: Partial<HeadlessPress> = {}): HeadlessPress => ({
   submitted: null,
   refused: [],
   blockedFormSubmission: false,
+  write: null,
+  writeSkipped: false,
+  notices: [],
   errors: [],
   ...over,
 });
@@ -29,13 +34,22 @@ const page = (over: Partial<HeadlessPageReport> = {}): HeadlessPageReport => ({
   submittedOnLoad: 0,
   liveForms: 0,
   text: "Curry, Ramen",
+  screenshot: null,
+  screenshotError: "",
+  notices: [],
   presses: [],
   pressesOmitted: 0,
   errors: [],
   ...over,
 });
 
-const narrate = (over: Partial<HeadlessPageReport> = {}, omittedPages = 0): string => narrateHeadlessRun({ ok: true, pages: [page(over)], omittedPages });
+/** A run that COULD write, because that is what `manageSharedApp` gives it. A run without a writer
+ *  is its own case and has its own tests below — the two say opposite things about the same page. */
+/** An accepted write that was cleaned up — the ordinary outcome, and the one most tests want. */
+const written = (): HeadlessWrite => ({ cid: "orders", ok: true, error: "", cleanup: "removed", cleanupError: "" });
+
+const narrate = (over: Partial<HeadlessPageReport> = {}, omittedPages = 0, run: Partial<Extract<HeadlessRun, { ok: true }>> = {}): string =>
+  narrateHeadlessRun({ ok: true, pages: [page(over)], omittedPages, writesSkipped: 0, screenshotDir: null, wrote: true, ...run });
 
 describe("narrateHeadlessRun", () => {
   it("names the fix for a page that never answered the handshake", () => {
@@ -77,12 +91,92 @@ describe("narrateHeadlessRun", () => {
   });
 
   it("says what it did not cover, and never says the app is ready to publish", () => {
-    // A run that goes perfectly still ends with the four things it hides. A report that could omit
-    // them would read as a green light on the one question it cannot answer.
-    const clean = narrate({ presses: [press({ submitted: { cid: "orders", fields: [] } })] });
-    expect(clean).toContain("Nothing was written");
+    // A run that goes perfectly still ends with what it hides. A report that could omit them would
+    // read as a green light on the questions it cannot answer.
+    const clean = narrate({ presses: [press({ submitted: { cid: "orders", fields: [] }, write: written() })] });
     expect(clean).toContain("does NOT prove the app is ready to publish");
-    expect(clean).toContain("Collections pane");
+    expect(clean).toContain("other people's devices");
+    expect(clean).toContain("two people submitting at once");
+  });
+
+  it("does not say 'nothing was written' about a run that wrote", () => {
+    // The line was fixed text and became false when the run started accepting
+    // (`plans/feat-headless-preview-parity.md`). A fixed line that has gone false is worse than no
+    // line: this whole report is read as a set of guarantees, and one of them would be a lie.
+    const wrote = narrate({ presses: [press({ submitted: { cid: "orders", fields: [] }, write: written() })] });
+    expect(wrote).not.toContain("Nothing was written");
+    expect(wrote).toContain("written to the real database as you, then removed again immediately");
+    // And it no longer sends the reader to the pane for the answer it now has itself.
+    expect(wrote).not.toContain("Collections pane");
+  });
+
+  it("still says nothing was written when the run had no writer", () => {
+    // Every test run, and any caller that asks for none. The two cases say opposite things about
+    // the same page, so the report must not have one voice for both.
+    const dry = narrate({ presses: [press({ submitted: { cid: "orders", fields: [] } })] }, 0, { wrote: false });
+    expect(dry).toContain("Nothing was written");
+    expect(dry).toContain("given no way to write");
+    expect(dry).toContain("whether the rules are deployed at all");
+  });
+
+  it("reports the rules' refusal as the answer, not as a broken page", () => {
+    // The one thing no preview could bring back before. An author reading this must not go looking
+    // for a fault in the page — the page did its job and the app's declaration did not.
+    const said = narrate({
+      presses: [
+        press({
+          submitted: { cid: "orders", fields: ["name"] },
+          write: { cid: "orders", ok: false, error: "the window for slots/1 opens at 2027-01-01T00:00:00.000Z", cleanup: "not-written", cleanupError: "" },
+        }),
+      ],
+    });
+    expect(said).toContain("REFUSED by the deployed rules for 'orders'");
+    expect(said).toContain("opens at 2027-01-01");
+    expect(said).toContain("a visitor pressing this button gets the same refusal");
+  });
+
+  it("names a record it could not take back, rather than reporting a clean run", () => {
+    // The one outcome that costs somebody else something: a booking left standing occupies a real
+    // slot in a real app. Silence here would read as "removed".
+    const said = narrate({
+      presses: [
+        press({ submitted: { cid: "orders", fields: [] }, write: { cid: "orders", ok: true, error: "", cleanup: "left", cleanupError: "not-this-session" } }),
+      ],
+    });
+    expect(said).toContain("could NOT be removed (not-this-session)");
+    expect(said).toContain("Take it out by hand before publishing");
+    expect(said).toContain("Any record this run could not remove is named");
+  });
+
+  it("tells a confirmation the run declined from one the page never made", () => {
+    // Opposite findings about the same button: "we chose not to ask" against "it is a dead
+    // button". Reported as the same thing, an author goes and rewrites a control that works.
+    const capped = narrate({ presses: [press({ submitted: { cid: "orders", fields: [] }, writeSkipped: true })] }, 0, { writesSkipped: 3 });
+    expect(capped).toContain("DECLINED rather than written");
+    expect(capped).toContain("3 further confirmations were DECLINED");
+    expect(capped).not.toContain("dead button");
+  });
+
+  it("marks what the page said about itself as the page's own words", () => {
+    // `detail` is whatever the document threw, and an author can write anything into an `Error`.
+    // A reader taking it for this report's word is being told something by a string nobody here
+    // composed.
+    const said = narrate({ notices: [{ code: "error", detail: "boom" }] });
+    expect(said).toContain("The PAGE reported about itself: error");
+    expect(said).toContain('"boom"');
+    expect(said).toContain("Those words are the page's, not this report's");
+  });
+
+  it("gives the picture's path, and says when there is none", () => {
+    // The pane's last advantage handed over: a person looking at the screen. A path costs a line
+    // and the bytes would cost the context, so the agent opens it when the words give it a reason.
+    const dir = join(tmpdir(), "p");
+    const shot = join(dir, "1-public-menu.png");
+    expect(narrate({ screenshot: shot }, 0, { screenshotDir: dir })).toContain(shot);
+    const none = narrate({ screenshotError: "the picture could not be taken: out of disk" });
+    expect(none).toContain("No picture was taken");
+    // Said as OURS, so the author does not go looking for it in their page.
+    expect(none).toContain("about this run, not about the page");
   });
 
   it("says a control could not be clicked, rather than calling it a dead button", () => {
