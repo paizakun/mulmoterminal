@@ -1,4 +1,4 @@
-import { ref, type Ref } from "vue";
+import { getCurrentScope, onScopeDispose, ref, type Ref } from "vue";
 import { presetLabel, type CwdPreset } from "../components/presets";
 import { isManagedWorktreePath, worktreeLabel } from "../../common/worktreePath";
 import type { Launcher } from "../components/launchers";
@@ -30,6 +30,12 @@ import { setSessionIdleReapDays } from "./sessionReap";
 import { setHeaderConfigSummary } from "./headerConfigSummary";
 import { postConfigField } from "./postConfigField";
 import { fetchWithTimeout } from "../utils/fetchWithTimeout";
+import { configRetryDelayMs } from "./configRetryPolicy";
+
+// Waiting between retry attempts. `setTimeout` rather than anything cancellable: a chain that
+// has been superseded checks its generation after the sleep, so an abandoned one costs a timer
+// that fires into a `return` and nothing else.
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // The custom attention-sound file is a SINGLETON ref shared across every
 // useAppConfig() caller — the beep player lives in the single view while the
@@ -84,15 +90,19 @@ const worktreesRoot = ref<string | null>(null);
 // the root rather than decide without it (Codex on #1543). Null when nothing is loading — then
 // there is nothing to wait for. It never rejects and `fetchWithTimeout` bounds it, so a dead
 // server delays one chip instead of stalling the queue.
-let configLoadInFlight: Promise<void> | null = null;
+let configLoadInFlight: Promise<unknown> | null = null;
 
 /** Run a config load, publishing it as the in-flight one for the duration — what a preset record
- *  waits on when it needs the worktree root before it can decide. */
-async function trackConfigLoad(load: () => Promise<void>): Promise<void> {
+ *  waits on when it needs the worktree root before it can decide.
+ *
+ *  ONE ATTEMPT, never the retry chain that may follow it (see `loadConfig`). The waiter above is
+ *  bounded by `fetchWithTimeout`; publishing a chain that sleeps between attempts would make a
+ *  restarting backend hold a chip's recording for half a minute instead of one request. */
+async function trackConfigLoad<T>(load: () => Promise<T>): Promise<T> {
   const run = load();
   configLoadInFlight = run;
   try {
-    await run;
+    return await run;
   } finally {
     // Only when a LATER load has not already taken the slot: clearing another's would tell a
     // waiter that nothing is coming.
@@ -518,6 +528,96 @@ async function saveUserMcpServers(next: UserMcpServer[]): Promise<boolean> {
 // line budget without saying anything a reader needed.
 const soundSettings = { soundFile, soundKinds, sounds, saveSound, saveSoundKinds, saveSounds };
 
+/** What one config read has to reach that is not module-level state: the per-call refs and the
+ *  preset manager's version coordination. Passed in rather than closed over so the read itself can
+ *  live out here beside the retry that drives it. */
+interface ConfigReaderDeps {
+  defaultCwd: Ref<string | null>;
+  snapshotVersion: () => number;
+  adoptServerPresets: (list: unknown, capturedVersion: number) => void;
+  migrateLegacyRecents: () => Promise<void>;
+}
+
+/** One attempt at reading the config. `true` when the server ANSWERED, adopted or not; `false`
+ *  only when the REQUEST failed (a restarting backend, the dev proxy's 502, a timeout) — the one
+ *  kind of failure a retry can fix, so the only one that arms one. A 200 whose body we cannot read
+ *  is the server's real answer, and asking nine more times returns the same thing. */
+function createConfigReader({ defaultCwd, snapshotVersion, adoptServerPresets, migrateLegacyRecents }: ConfigReaderDeps): () => Promise<boolean> {
+  return async function readConfig(): Promise<boolean> {
+    const version = snapshotVersion();
+    try {
+      const res = await fetchWithTimeout("/api/config");
+      if (!res.ok) return false;
+      const body: unknown = await res.json();
+      if (!isRecord(body)) return true;
+      const c = body;
+      defaultCwd.value = typeof c.cwd === "string" ? c.cwd : null;
+      home.value = typeof c.home === "string" ? c.home : null;
+      worktreesRoot.value = typeof c.worktreesRoot === "string" ? c.worktreesRoot : null;
+      adoptServerPresets(c.cwdPresets, version);
+      adoptSoundConfig(c);
+      pushEnabled.value = c.pushEnabled === true;
+      pushKinds.value = listOf(c.pushKinds, isPushKind);
+      adoptRepoConfig(c);
+      adoptListConfig(c);
+      applyGlobalSettings(c);
+      adoptServerSideSettings(c);
+      await migrateLegacyRecents();
+      return true;
+    } catch {
+      // Not fatal and not final: the retry above is what turns a restarting backend back into a
+      // populated launcher, so this only has to say that this attempt got nothing.
+      return false;
+    }
+  };
+}
+
+/**
+ * The config read, WITH the retry that makes a failed one temporary.
+ *
+ * Nothing else re-reads `/api/config`: it runs once, from the shell's `onMounted`, and every saved
+ * directory, the workspace chip and a dozen global settings come out of it. So one failed request
+ * used to leave the launcher showing no saved directories for as long as the tab stayed open —
+ * indistinguishable from a user who has opened none, with nothing on screen saying otherwise. A
+ * backend that is merely RESTARTING is what produces it, and in this repo's own dev loop that is
+ * routine: Vite keeps serving the page from its own port and answers the proxied `/api` with a 502
+ * for the seconds the backend takes to come back (`scripts/dev-server.mjs` restarts it on every
+ * save under `server/`).
+ *
+ * Module-level, like `createPresetManager` — it owns state (which chain is current, whether the
+ * scope is gone) that has no business being read from anywhere else.
+ */
+function createConfigLoader(loadOnce: () => Promise<boolean>): () => Promise<void> {
+  // Which chain is the current one. A second `load()` — a remount, an HMR update — supersedes the
+  // chain the previous one left running, so two of them never race to write the same refs.
+  let generation = 0;
+  // Set when the scope that started a chain goes away: a grid that unmounted has nothing to fill
+  // in, and a chain outliving it would sleep on and write into refs nobody reads.
+  let disposed = false;
+  if (getCurrentScope()) onScopeDispose(() => (disposed = true));
+
+  async function retry(mine: number): Promise<void> {
+    for (let attempt = 0; ; attempt++) {
+      const delay_ms = configRetryDelayMs(attempt);
+      // The server is down rather than restarting. Reloading the page is the user's move, and
+      // polling it for the life of the tab would not have made it answer.
+      if (delay_ms === null) return;
+      await sleep(delay_ms);
+      if (mine !== generation || disposed) return; // superseded, or the caller is gone
+      if (await trackConfigLoad(loadOnce)) return;
+    }
+  }
+
+  /** The FIRST attempt is awaited, so `onMounted(loadConfig)` still means "the config is here" on
+   *  a healthy server. The retries are deliberately not: they are a background repair, and a mount
+   *  must not block on a server that may never answer. */
+  return async function load(): Promise<void> {
+    const mine = ++generation;
+    if (await trackConfigLoad(loadOnce)) return;
+    void retry(mine);
+  };
+}
+
 // Server config (default workspace dir, home, directory presets, custom sound)
 // shared by both the single view and the grid view so each can open the settings
 // modal without duplicating the fetch/save logic.
@@ -536,32 +636,7 @@ export function useAppConfig() {
 
   const { savePresets, recordPreset, removePreset, migrateLegacyRecents, snapshotVersion, adoptServerPresets } = createPresetManager(presets, saving, error);
 
-  const loadConfig = (): Promise<void> => trackConfigLoad(loadConfigOnce);
-
-  async function loadConfigOnce() {
-    const version = snapshotVersion();
-    try {
-      const res = await fetchWithTimeout("/api/config");
-      if (!res.ok) return;
-      const body: unknown = await res.json();
-      if (!isRecord(body)) return;
-      const c = body;
-      defaultCwd.value = typeof c.cwd === "string" ? c.cwd : null;
-      home.value = typeof c.home === "string" ? c.home : null;
-      worktreesRoot.value = typeof c.worktreesRoot === "string" ? c.worktreesRoot : null;
-      adoptServerPresets(c.cwdPresets, version);
-      adoptSoundConfig(c);
-      pushEnabled.value = c.pushEnabled === true;
-      pushKinds.value = listOf(c.pushKinds, isPushKind);
-      adoptRepoConfig(c);
-      adoptListConfig(c);
-      applyGlobalSettings(c);
-      adoptServerSideSettings(c);
-      await migrateLegacyRecents();
-    } catch {
-      // the app still works; presets are just unavailable
-    }
-  }
+  const loadConfig = createConfigLoader(createConfigReader({ defaultCwd, snapshotVersion, adoptServerPresets, migrateLegacyRecents }));
 
   return {
     defaultCwd,
