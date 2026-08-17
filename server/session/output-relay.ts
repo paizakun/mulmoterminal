@@ -5,7 +5,7 @@
 // speed makes each read SMALLER, so the same output arrives as far more chunks — six cells went
 // from 118k to 655k in one measurement (#1506). One frame each would move the cost we just
 // removed from appendBoundedOutput onto JSON.stringify and the socket.
-import { growOutputTail } from "./terminal-replay.js";
+import { growOutputTail, trackTerminalModes } from "./terminal-replay.js";
 import { sendFrame } from "./ws-frames.js";
 import type { PtyEntry } from "./types.js";
 
@@ -52,6 +52,10 @@ export function createOutputRelay(entry: PtyEntry, limit: number): OutputRelay {
   };
 
   const push = (data: string) => {
+    // Only a tmux-less entry needs this — tmuxTerminalModes reads the live state straight from
+    // tmux, so tracking it here too would be a second, redundant source of truth for the entries
+    // that already have the authoritative one.
+    if (!entry.tmux) trackTerminalModes(entry, data);
     entry.buffer = growOutputTail(entry.buffer, data, limit);
     // Nobody to send to — a session whose browser has closed, still working in the background.
     // Queueing would only build batches to throw away, and the buffer above is already the

@@ -23,6 +23,47 @@ export function stripTerminalQueries(data: string): string {
   return QUERY_PATTERNS.reduce((out, re) => out.replace(re, ""), data);
 }
 
+// The same modes infra/tmux.ts's TERMINAL_MODE_FLAGS restores from tmux — kept as a literal
+// copy rather than a shared import because pulling infra/tmux.ts into this module for one array
+// would drag its process-spawning surface along with it.
+const TRACKED_MODES = new Set([1049, 1000, 1002, 1003, 1005, 1006]);
+
+const MODE_SEQUENCE = new RegExp(ESC + "\\[\\?([0-9;]+)([hl])", "g");
+
+// Where a chunk could have been cut mid-sequence: an ESC, or ESC "[", or ESC "[?" plus whatever
+// digits/semicolons came before the cut — anything short of the h/l that would have closed it.
+// Anchored at the END of the (post-match) remainder, so a complete, unrelated escape sequence
+// earlier in that remainder (colour codes, cursor moves) is not mistaken for a pending one.
+const INCOMPLETE_MODE_TAIL = new RegExp(ESC + "(\\[(\\?[0-9;]*)?)?$");
+
+// Mirrors tmuxTerminalModes for sessions with no tmux to ask (infra/tmux.ts:325 chose the tmux
+// query specifically to avoid this bookkeeping — plain shells and a tmux-less host are the one
+// case that leaves nothing to query, so it happens here instead, scoped to the modes the reattach
+// prefix ever restores).
+//
+// `entry.modesCarry` holds a sequence this call found incomplete at the end of `data`, so a
+// DECSET/DECRST split across two pty reads is not lost between chunks (the same hazard
+// appendBoundedOutput's cut handles for the buffer, from the opposite direction).
+export function trackTerminalModes(entry: { modes?: Set<number>; modesCarry?: string }, data: string): void {
+  const modes = (entry.modes ??= new Set());
+  const combined = (entry.modesCarry ?? "") + data;
+  MODE_SEQUENCE.lastIndex = 0;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = MODE_SEQUENCE.exec(combined)) !== null) {
+    lastIndex = MODE_SEQUENCE.lastIndex;
+    const [, codes, setter] = match;
+    const setting = setter === "h";
+    for (const code of (codes ?? "").split(";").map(Number)) {
+      if (!TRACKED_MODES.has(code)) continue;
+      if (setting) modes.add(code);
+      else modes.delete(code);
+    }
+  }
+  const tailMatch = INCOMPLETE_MODE_TAIL.exec(combined.slice(lastIndex));
+  entry.modesCarry = tailMatch ? tailMatch[0] : "";
+}
+
 // The DECSETs that put a reattaching browser back into the screen buffer and mouse modes the app
 // set once and never repeated (#1073) — read from tmux, sent AHEAD of the replay so the tail
 // renders where it was written.

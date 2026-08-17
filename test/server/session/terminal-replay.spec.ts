@@ -1,6 +1,13 @@
 // @vitest-environment node
 import { describe, it, expect } from "vitest";
-import { appendBoundedOutput, boundedTail, growOutputTail, stripTerminalQueries, terminalModePrefix } from "../../../server/session/terminal-replay.js";
+import {
+  appendBoundedOutput,
+  boundedTail,
+  growOutputTail,
+  stripTerminalQueries,
+  terminalModePrefix,
+  trackTerminalModes,
+} from "../../../server/session/terminal-replay.js";
 
 const ESC = String.fromCharCode(0x1b);
 const BEL = String.fromCharCode(0x07);
@@ -206,6 +213,69 @@ describe("terminalModePrefix", () => {
   // instead of a text selection (#729). One sequence per mode is what keeps the swallow working.
   it("never combines modes into one parameter list", () => {
     expect(terminalModePrefix([1049, 1003, 1006])).not.toContain(";");
+  });
+});
+
+// tmuxTerminalModes has a tmux pane to ask; a tmux-less entry has nothing to ask, so this is
+// what reattachPty falls back to for it — the byte-stream equivalent of infra/tmux.ts's
+// TERMINAL_MODE_FLAGS query, restricted to the same modes.
+describe("trackTerminalModes", () => {
+  it("adds a mode on set, removes it on reset", () => {
+    const entry: { modes?: Set<number>; modesCarry?: string } = {};
+    trackTerminalModes(entry, `${ESC}[?1049h`);
+    expect([...(entry.modes ?? [])]).toEqual([1049]);
+    trackTerminalModes(entry, `${ESC}[?1049l`);
+    expect([...(entry.modes ?? [])]).toEqual([]);
+  });
+
+  it("tracks each mode in a combined DECSET independently", () => {
+    const entry: { modes?: Set<number>; modesCarry?: string } = {};
+    trackTerminalModes(entry, `${ESC}[?1000;1002;1006h`);
+    expect([...(entry.modes ?? [])].sort()).toEqual([1000, 1002, 1006]);
+  });
+
+  it("ignores a mode outside the restored set (e.g. bracketed paste, 2004)", () => {
+    const entry: { modes?: Set<number>; modesCarry?: string } = {};
+    trackTerminalModes(entry, `${ESC}[?2004h`);
+    expect([...(entry.modes ?? [])]).toEqual([]);
+  });
+
+  it("leaves visible text and unrelated escapes alone", () => {
+    const entry: { modes?: Set<number>; modesCarry?: string } = {};
+    trackTerminalModes(entry, `${ESC}[?1049hhello ${ESC}[31mworld${ESC}[0m`);
+    expect([...(entry.modes ?? [])]).toEqual([1049]);
+  });
+
+  // The reason this exists at all: node-pty hands over whatever a single read() returned, with
+  // no regard for where an escape sequence falls, so a DECSET can arrive split across two calls.
+  it.each([
+    [`${ESC}`, `[?1049h`],
+    [`${ESC}[`, `?1049h`],
+    [`${ESC}[?`, `1049h`],
+    [`${ESC}[?10`, `49h`],
+    [`${ESC}[?1049`, `h`],
+  ])("recovers a mode set split across chunks: %j + %j", (first, second) => {
+    const entry: { modes?: Set<number>; modesCarry?: string } = {};
+    trackTerminalModes(entry, first);
+    trackTerminalModes(entry, second);
+    expect([...(entry.modes ?? [])]).toEqual([1049]);
+  });
+
+  it("does not mistake a complete, unrelated sequence at the chunk boundary for a pending one", () => {
+    const entry: { modes?: Set<number>; modesCarry?: string } = {};
+    trackTerminalModes(entry, `hello ${ESC}[31m`); // closes with "m" — nothing left pending
+    expect(entry.modesCarry).toBe("");
+    trackTerminalModes(entry, `${ESC}[?1049h`);
+    expect([...(entry.modes ?? [])]).toEqual([1049]);
+  });
+
+  it("carries an aborted escape forward rather than growing it unbounded", () => {
+    const entry: { modes?: Set<number>; modesCarry?: string } = {};
+    trackTerminalModes(entry, "text before" + ESC);
+    expect(entry.modesCarry).toBe(ESC);
+    trackTerminalModes(entry, "not-a-sequence-after-all");
+    expect(entry.modesCarry).toBe("");
+    expect([...(entry.modes ?? [])]).toEqual([]);
   });
 });
 

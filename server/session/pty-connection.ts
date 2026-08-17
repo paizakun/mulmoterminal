@@ -112,9 +112,11 @@ export function createConnectionHandlers(deps: ConnectionDeps) {
     if (ws.readyState === ws.OPEN) {
       // The replay is a bounded TAIL, and the modes an app sets once at startup — the alternate
       // buffer above all — fell off its front long ago. Restore them first, or the browser draws
-      // this into the normal buffer and the wheel stops reaching the app (#1073). Only a tmux
-      // session can be asked; anything else replays as before.
-      const prefix = entry.tmux ? terminalModePrefix(deps.terminalModesOf(sessionId)) : "";
+      // this into the normal buffer and the wheel stops reaching the app (#1073). A tmux session
+      // is asked directly; a tmux-less one has no pane to ask, so it falls back to what
+      // trackTerminalModes saw go by on this same entry's byte stream (output-relay.ts).
+      const modes = entry.tmux ? deps.terminalModesOf(sessionId) : Array.from(entry.modes ?? []);
+      const prefix = terminalModePrefix(modes);
       // Cut to the bound BEFORE stripping: the buffer runs over it (PtyEntry.buffer), and the
       // strip is five regex passes that would otherwise sweep the overrun as well.
       // Stripping keeps xterm from re-answering the replayed queries as stray input (e.g. a DA

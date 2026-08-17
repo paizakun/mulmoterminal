@@ -35,6 +35,14 @@ export interface PtyEntry {
   // True when `term` is a tmux client (persistent): killing it only detaches, so reap
   // must kill the tmux session to actually end the program.
   tmux?: boolean;
+  // DECSET/DECRST modes (alternate screen, mouse tracking) currently on, tracked from the raw
+  // byte stream by trackTerminalModes for a `!tmux` entry — tmuxTerminalModes has nothing to
+  // query for one, and without this a reattach on a tmux-less host replays into a browser xterm
+  // that never learns the session is in the alternate screen.
+  modes?: Set<number>;
+  // An escape sequence trackTerminalModes found incomplete at the end of the last chunk it saw,
+  // carried to the front of the next one.
+  modesCarry?: string;
   // A reattach replayed a delta tail, so the browser's screen is only as complete as that window
   // (see tmuxRedrawClient). Cleared by the first resize frame after the reattach — waiting for it
   // is the point, since that frame is where the client tells us the size it actually settled at.
