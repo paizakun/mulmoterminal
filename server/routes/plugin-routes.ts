@@ -10,7 +10,7 @@ import type { Express } from "express";
 import { CLAUDE_CWD, PORT } from "../config/env.js";
 import { messageOf } from "../errors.js";
 import { isRecord } from "../../common/isRecord.js";
-import { backgroundMarkers, markFailedWorker, markUnplacedSession } from "../session/registry.js";
+import { backgroundMarkers, markFailedWorker, markUnplacedSession, ptys } from "../session/registry.js";
 import { runWithHiddenMarker } from "../session/hiddenMarker.js";
 import { registerCompletionHook } from "../session/completion-hooks.js";
 import { backgroundChatMessage, parseBackgroundChat, spawnModeFor, type SpawnMode } from "../session/background-chat.js";
@@ -196,8 +196,31 @@ export function mountPluginRoutes(app: Express, deps: PluginRouteDeps): void {
     }
   });
 
+  mountClearSessionRoute(app);
   mountCollectionRoute(app);
   mountSharedAppRoute(app);
+}
+
+/** Split out of `mountPluginRoutes` for its line budget, same as the two routes below. */
+function mountClearSessionRoute(app: Express): void {
+  // Host tool: clearSession. Types "/clear\r" into the CALLING session's own pty — the
+  // session id rides in the same header manageCollection/manageSharedApp read below, since
+  // that is the MCP broker's only way to say which session is asking. No session id, or one
+  // whose pty is already gone (session ended, or this was reached from outside a live
+  // terminal), narrates rather than throwing — a clear that can't find anything to clear.
+  app.post("/api/plugin/clearSession", (req, res) => {
+    const header = req.get(SESSION_HEADER);
+    const sessionId = header && SESSION_ID_RE.test(header) ? header : null;
+    const entry = sessionId ? ptys.get(sessionId) : undefined;
+    if (!entry) return res.json({ message: "clearSession: no active terminal session found." });
+    try {
+      entry.term.write("/clear\r");
+    } catch (err) {
+      console.error(`[clearSession] write failed for ${sessionId}: ${messageOf(err)}`);
+      return res.json({ message: `clearSession failed: ${messageOf(err)}` });
+    }
+    return res.json({ message: "Session cleared." });
+  });
 }
 
 /** Split out of `mountPluginRoutes` for its line budget. Both of these are host-tool dispatch
