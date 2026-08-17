@@ -538,17 +538,41 @@ interface ConfigReaderDeps {
   migrateLegacyRecents: () => Promise<void>;
 }
 
+/** What one attempt is given: the signal that cancels it when it is no longer wanted, and the
+ *  test for whether its answer is still the one to adopt. */
+interface ReadAttempt {
+  signal: AbortSignal;
+  stale: () => boolean;
+}
+
+type ConfigRead = (attempt: ReadAttempt) => Promise<boolean>;
+
 /** One attempt at reading the config. `true` when the server ANSWERED, adopted or not; `false`
  *  only when the REQUEST failed (a restarting backend, the dev proxy's 502, a timeout) — the one
- *  kind of failure a retry can fix, so the only one that arms one. A 200 whose body we cannot read
- *  is the server's real answer, and asking nine more times returns the same thing. */
-function createConfigReader({ defaultCwd, snapshotVersion, adoptServerPresets, migrateLegacyRecents }: ConfigReaderDeps): () => Promise<boolean> {
-  return async function readConfig(): Promise<boolean> {
+ *  kind of failure a retry can fix, so the only one that arms one.
+ *
+ *  THE SPLIT IS AT THE RESPONSE HEAD, not at the end of the function: everything after a 200 has
+ *  arrived is the server's real answer, whether we can parse it, recognise its shape, or finish
+ *  adopting it. Asking such a server nine more times returns the same body, so the reload is the
+ *  user's move. Keeping one `try` around both halves quietly made a malformed body retryable —
+ *  Codex caught exactly that on #1771. */
+function createConfigReader({ defaultCwd, snapshotVersion, adoptServerPresets, migrateLegacyRecents }: ConfigReaderDeps): ConfigRead {
+  return async function readConfig({ signal, stale }: ReadAttempt): Promise<boolean> {
     const version = snapshotVersion();
+    let res: Response;
     try {
-      const res = await fetchWithTimeout("/api/config");
-      if (!res.ok) return false;
+      res = await fetchWithTimeout("/api/config", { signal });
+    } catch {
+      return false; // the request never landed — this is what a retry is for
+    }
+    if (!res.ok) return false;
+    try {
       const body: unknown = await res.json();
+      // Asked AFTER the body, because that is the await this attempt can lose the race on: a
+      // newer load's answer may already have been adopted while ours was still arriving, and
+      // adopting now would put the older config back (Codex on #1771). The abort covers the
+      // request itself; this covers a response that had already landed when it fired.
+      if (stale()) return true;
       if (!isRecord(body)) return true;
       const c = body;
       defaultCwd.value = typeof c.cwd === "string" ? c.cwd : null;
@@ -563,12 +587,11 @@ function createConfigReader({ defaultCwd, snapshotVersion, adoptServerPresets, m
       applyGlobalSettings(c);
       adoptServerSideSettings(c);
       await migrateLegacyRecents();
-      return true;
     } catch {
-      // Not fatal and not final: the retry above is what turns a restarting backend back into a
-      // populated launcher, so this only has to say that this attempt got nothing.
-      return false;
+      // Unreadable, or an adoption step that failed. The screen keeps whatever it already had —
+      // and this still counts as answered, so no retry is armed.
     }
+    return true;
   };
 }
 
@@ -587,24 +610,54 @@ function createConfigReader({ defaultCwd, snapshotVersion, adoptServerPresets, m
  * Module-level, like `createPresetManager` — it owns state (which chain is current, whether the
  * scope is gone) that has no business being read from anywhere else.
  */
-function createConfigLoader(loadOnce: () => Promise<boolean>): () => Promise<void> {
+function createConfigLoader(loadOnce: ConfigRead): () => Promise<void> {
   // Which chain is the current one. A second `load()` — a remount, an HMR update — supersedes the
   // chain the previous one left running, so two of them never race to write the same refs.
   let generation = 0;
   // Set when the scope that started a chain goes away: a grid that unmounted has nothing to fill
   // in, and a chain outliving it would sleep on and write into refs nobody reads.
   let disposed = false;
-  if (getCurrentScope()) onScopeDispose(() => (disposed = true));
+  // The attempt currently in flight, so being superseded (or disposed) CANCELS it rather than
+  // waiting for it to land and be discarded.
+  let inFlight: AbortController | null = null;
+  const abandonInFlight = () => {
+    inFlight?.abort();
+    inFlight = null;
+  };
+  if (getCurrentScope())
+    onScopeDispose(() => {
+      disposed = true;
+      abandonInFlight();
+    });
+
+  /** Arm the next attempt, or `null` when this chain is no longer the one to make it. The check
+   *  and the assignment are one synchronous step on purpose: with an await between them a chain
+   *  that had just been superseded could publish its controller over the current one, and the
+   *  next supersede would then cancel the wrong request. */
+  function arm(mine: number): ReadAttempt | null {
+    if (mine !== generation || disposed) return null;
+    const controller = new AbortController();
+    inFlight = controller;
+    return { signal: controller.signal, stale: () => mine !== generation || disposed };
+  }
+
+  async function attempt(mine: number): Promise<boolean | null> {
+    const armed = arm(mine);
+    if (!armed) return null; // superseded, or the caller is gone
+    const answered = await trackConfigLoad(() => loadOnce(armed));
+    if (inFlight?.signal === armed.signal) inFlight = null;
+    return armed.stale() ? null : answered;
+  }
 
   async function retry(mine: number): Promise<void> {
-    for (let attempt = 0; ; attempt++) {
-      const delay_ms = configRetryDelayMs(attempt);
+    for (let round = 0; ; round++) {
+      const delay_ms = configRetryDelayMs(round);
       // The server is down rather than restarting. Reloading the page is the user's move, and
       // polling it for the life of the tab would not have made it answer.
       if (delay_ms === null) return;
       await sleep(delay_ms);
-      if (mine !== generation || disposed) return; // superseded, or the caller is gone
-      if (await trackConfigLoad(loadOnce)) return;
+      const answered = await attempt(mine);
+      if (answered !== false) return; // answered, or this chain is no longer the current one
     }
   }
 
@@ -612,8 +665,9 @@ function createConfigLoader(loadOnce: () => Promise<boolean>): () => Promise<voi
    *  a healthy server. The retries are deliberately not: they are a background repair, and a mount
    *  must not block on a server that may never answer. */
   return async function load(): Promise<void> {
+    abandonInFlight(); // an earlier chain's request must not land on top of this one
     const mine = ++generation;
-    if (await trackConfigLoad(loadOnce)) return;
+    if ((await attempt(mine)) !== false) return;
     void retry(mine);
   };
 }

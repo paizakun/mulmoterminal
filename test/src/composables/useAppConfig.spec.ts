@@ -489,7 +489,7 @@ describe("useAppConfig — loadConfig retries a request that failed", () => {
   // A 200 is the server's real answer even when the body is unusable. Retrying re-reads the same
   // body, and this spec is also what keeps the other loadConfig tests from leaving a chain running
   // into the next one.
-  it("does not retry a body it simply could not read", async () => {
+  it("does not retry a body of the wrong shape", async () => {
     const calls = mockAttempts(UP([]));
     const { loadConfig } = useAppConfig();
 
@@ -497,6 +497,45 @@ describe("useAppConfig — loadConfig retries a request that failed", () => {
     await vi.advanceTimersByTimeAsync(120_000);
 
     expect(calls).toHaveLength(1);
+  });
+
+  // The same rule one step earlier: a body that will not PARSE at all. The wrong-shape test above
+  // cannot see this — its `json()` resolves — and with one `try` around the whole read this case
+  // came out the far side as a failed request and armed the chain (Codex on #1771).
+  it("does not retry a body that will not parse", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = vi.fn(async (url: string) => {
+      calls.push(String(url));
+      return {
+        ok: true,
+        json: async () => {
+          throw new SyntaxError("Unexpected end of JSON input");
+        },
+      };
+    }) as unknown as typeof fetch;
+    const { loadConfig } = useAppConfig();
+
+    await expect(loadConfig()).resolves.toBeUndefined();
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    expect(calls).toHaveLength(1);
+  });
+
+  // A non-2xx IS retryable, and it is the shape the dev proxy answers with while the backend is
+  // restarting (502, with a text/plain body that never reaches `json()`).
+  it("retries a 502 from the dev proxy", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = vi.fn(async (url: string) => {
+      calls.push(String(url));
+      return calls.length === 1 ? { ok: false, status: 502 } : { ok: true, json: async () => ({ cwdPresets: [{ label: "proj", path: "/p" }] }) };
+    }) as unknown as typeof fetch;
+    const { loadConfig, presets } = useAppConfig();
+
+    await loadConfig();
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(presets.value).toEqual([{ label: "proj", path: "/p" }]);
+    expect(calls).toHaveLength(2);
   });
 
   it("abandons the chain when the scope that started it goes away", async () => {
@@ -511,6 +550,35 @@ describe("useAppConfig — loadConfig retries a request that failed", () => {
     await vi.advanceTimersByTimeAsync(120_000);
 
     expect(calls).toHaveLength(1);
+  });
+
+  // The same hazard one step in: an attempt that is ALREADY IN FLIGHT when a newer load answers.
+  // It is aborted, but a response that had landed before the abort would otherwise be adopted on
+  // top of the fresh one — and the module-level singletons (launchers, quick commands, the global
+  // settings) have no version guard of their own to catch it (Codex on #1771).
+  it("does not adopt an answer that arrived after a newer load overtook it", async () => {
+    let releaseStale: () => void = () => {};
+    const stalled = new Promise<void>((resolve) => (releaseStale = resolve));
+    let call = 0;
+    globalThis.fetch = vi.fn(async () => {
+      call += 1;
+      if (call === 1) {
+        await stalled;
+        return { ok: true, json: async () => ({ launchers: [{ label: "stale", command: "old" }] }) };
+      }
+      return { ok: true, json: async () => ({ launchers: [{ label: "fresh", command: "new" }] }) };
+    }) as unknown as typeof fetch;
+
+    const { loadConfig, launchers } = useAppConfig();
+    const first = loadConfig();
+    await loadConfig();
+    expect(launchers.value).toEqual([{ label: "fresh", command: "new" }]);
+
+    releaseStale();
+    await first;
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    expect(launchers.value).toEqual([{ label: "fresh", command: "new" }]);
   });
 
   // Two chains writing the same refs is how a stale answer lands on top of a fresh one. A remount
