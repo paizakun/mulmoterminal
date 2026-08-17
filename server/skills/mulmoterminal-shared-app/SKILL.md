@@ -166,8 +166,10 @@ So the report proves the page draws, the handshake completes, the records arrive
 reaches the parent as a submission the declaration accepts**. It does NOT tell you what the deployed
 rules would say about that submission.
 
-It also **photographs each page** and gives you the path. Open it when the words leave the layout in
-doubt; that is the one thing prose cannot carry.
+It also **tries to photograph each page**, and gives you the path for every one it managed. Open it
+when the words leave the layout in doubt; that is the one thing prose cannot carry. A page with no
+picture says why in its own line — the capture failed, or there was nowhere to write it — and that
+is a fact about the run rather than about the page.
 
 If no browser can be started it says so, and then the pane below is the whole answer rather than the
 second half of it.
