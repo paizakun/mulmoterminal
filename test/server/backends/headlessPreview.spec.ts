@@ -320,67 +320,34 @@ describe.skipIf(!chromeReady)("a headless run, in a real browser", () => {
     expect(unreachable?.presses[1]?.submitted).toBeNull();
   });
 
-  it("accepts the confirmation, reports the verdict, and takes the record back", async () => {
-    // THE WHOLE OF P6 in one run (`plans/feat-headless-preview-parity.md`). The writer is a fake —
-    // this test has no app, no session and no database — but it is the SAME seam
-    // `manageSharedApp` fills with `writePreviewSubmission` / `undoPreviewSubmission`, so what is
-    // checked here is the sequence: the parent asks, the host writes, the verdict comes back, and
-    // the record is removed BEFORE the next press mounts.
-    const wrote: { cid: string; values: Record<string, string> }[] = [];
-    const undone: string[] = [];
-    const run = await runPagesHeadless([page("works", WORKS)], {
-      write: async (cid, values) => {
-        wrote.push({ cid, values });
-        return { ok: true, token: `t${wrote.length}` };
+  it("WRITES NOTHING against a real page, because no runtime marks a submission yet", async () => {
+    // THE GATE, against four pages that each break a different guess somebody might make about
+    // cause: the ordinary one, the one that submits on load, the one that resubmits the moment its
+    // confirmation is answered, and the one whose timer fires later. None of their submissions
+    // carries the runtime's mark (`GESTURE_MARK`), so none is written — and that is the whole of
+    // the rule, with no window and no counting anywhere near it.
+    //
+    // This is the test that will change when `@receptron/sharedapp` starts marking: the first page
+    // will write, and the other three still must not.
+    const wrote: string[] = [];
+    const run = await runPagesHeadless(
+      [page("works", WORKS), page("onload", SUBMITS_ON_LOAD), page("resubmits", RESUBMITS_ON_DECLINE), page("timer", SUBMITS_ON_A_TIMER)],
+      {
+        write: async (_cid, values) => {
+          wrote.push(values.name ?? "");
+          return { ok: true, token: `t${wrote.length}` };
+        },
+        undo: async () => ({ ok: true }),
       },
-      undo: async (token) => {
-        undone.push(token);
-        return { ok: true };
-      },
-    });
+    );
     if (!run.ok) throw new Error(run.problems.join(" "));
-    // The VALUES reached the host, not just the fact of a submission — the record the rules judge
-    // is built from these, so a press that carried an empty object would be a false green.
-    expect(wrote).toEqual([{ cid: "orders", values: { name: "preview" } }]);
-    // Removed, and removed with the token that write handed back.
-    expect(undone).toEqual(["t1"]);
-    expect(run.wrote).toBe(true);
-    expect(run.pages[0]?.presses[0]?.write).toEqual({ cid: "orders", ok: true, error: "", reason: "rules", cleanup: "removed", cleanupError: "" });
-  }, 120_000);
-
-  it("carries the rules' refusal back, and does not try to undo what was never written", async () => {
-    // A refused write has no record and no token. Undoing anyway would be a delete aimed at
-    // nothing — harmless here, and a request to the database on every refused press in production.
-    const undone: string[] = [];
-    const run = await runPagesHeadless([page("works", WORKS)], {
-      write: async () => ({ ok: false, error: "the window for slots/1 opens at 2027-01-01T00:00:00.000Z" }),
-      undo: async (token) => {
-        undone.push(token);
-        return { ok: true };
-      },
-    });
-    if (!run.ok) throw new Error(run.problems.join(" "));
-    expect(undone).toEqual([]);
-    expect(run.pages[0]?.presses[0]?.write).toEqual({
-      cid: "orders",
-      ok: false,
-      error: "the window for slots/1 opens at 2027-01-01T00:00:00.000Z",
-      reason: "rules",
-      cleanup: "not-written",
-      cleanupError: "",
-    });
-  }, 120_000);
-
-  it("says a record it could not remove is still there, rather than reporting a clean run", async () => {
-    // The outcome that costs somebody else something. Silence here reads as "removed", and a
-    // booking left standing occupies a real slot in a real app.
-    const run = await runPagesHeadless([page("works", WORKS)], {
-      write: async () => ({ ok: true, token: "t1" }),
-      undo: async () => ({ ok: false, error: "not-this-session" }),
-    });
-    if (!run.ok) throw new Error(run.problems.join(" "));
-    expect(run.pages[0]?.presses[0]?.write).toMatchObject({ ok: true, cleanup: "left", cleanupError: "not-this-session" });
-  }, 120_000);
+    expect(wrote).toEqual([]);
+    // The submission REACHED the parent on the ordinary page — that half is proven, and it is what
+    // the run is for. What was not established is that the press caused it.
+    expect(run.pages[0]?.presses[0]?.submitted).toEqual({ cid: "orders", fields: ["name"] });
+    expect(run.pages[0]?.presses[0]?.writeWithheld).toBe(true);
+    expect(run.pages[0]?.presses[0]?.write).toBeNull();
+  }, 240_000);
 
   it("writes nothing when it is given no writer, which is every run a test drives", async () => {
     // The invariant that keeps every other test in this file honest: the default has to be the
@@ -391,52 +358,6 @@ describe.skipIf(!chromeReady)("a headless run, in a real browser", () => {
     expect(run.pages[0]?.presses[0]?.submitted).toEqual({ cid: "orders", fields: ["name"] });
     expect(run.pages[0]?.presses[0]?.write).toBeNull();
     expect(run.pages[0]?.presses[0]?.writeSkipped).toBe(false);
-  }, 120_000);
-
-  it("stops after its budget of real writes, and counts what it declined", async () => {
-    // A silent cap reads as "everything was covered". The page below has more controls that submit
-    // than the budget allows, so the run has to say how many confirmations it turned down.
-    const written: string[] = [];
-    const run = await runPagesHeadless(
-      Array.from({ length: LIMITS.writes + 2 }, (_, index) => page(`p${index}`, WORKS)),
-      {
-        write: async (cid) => {
-          written.push(cid);
-          return { ok: true, token: `t${written.length}` };
-        },
-        undo: async () => ({ ok: true }),
-      },
-    );
-    if (!run.ok) throw new Error(run.problems.join(" "));
-    expect(written).toHaveLength(LIMITS.writes);
-    expect(run.writesSkipped).toBe(2);
-    expect(run.pages.at(-1)?.presses[0]?.writeSkipped).toBe(true);
-  }, 240_000);
-
-  it("sweeps a record it wrote when the run itself falls over", async () => {
-    // The crash path, and the only thing the ledger is for. An undo that FAILS is reported on its
-    // press and is not swept — retrying it would contradict that line — so what is exercised here
-    // is a write whose undo was never reached at all.
-    const undone: string[] = [];
-    let first = true;
-    const run = await runPagesHeadless([page("works", WORKS)], {
-      write: async () => ({ ok: true, token: "t1" }),
-      undo: async (token) => {
-        // The first call is the one `acceptOne` makes; throwing there is what a browser dying
-        // mid-press looks like from here. The sweep in the `finally` is the second.
-        if (first) {
-          first = false;
-          throw new Error("the connection went away");
-        }
-        undone.push(token);
-        return { ok: true };
-      },
-    });
-    if (!run.ok) throw new Error(run.problems.join(" "));
-    // Reported on the press, because the attempt was made and failed...
-    expect(run.pages[0]?.presses[0]?.write).toMatchObject({ ok: true, cleanup: "left" });
-    // ...and NOT swept, for exactly that reason: the report already says it is standing.
-    expect(undone).toEqual([]);
   }, 120_000);
 
   it("gives the authored page no way to reach the writer", async () => {
@@ -479,113 +400,6 @@ describe.skipIf(!chromeReady)("a headless run, in a real browser", () => {
     // Exactly one write, and it came through the parent — never the page's own call.
     expect(calls).toEqual(["x"]);
   }, 120_000);
-
-  it("hands the page the database's real answer, so its own failure path runs", async () => {
-    // The reason to ACCEPT rather than decline: the page's post-submit branch is code an author
-    // wrote and nobody has run. Declining exercises the cancelled path; accepting with a fake
-    // success exercises a path the visitor will never take.
-    const run = await runPagesHeadless([page("works", WORKS)], {
-      write: async () => ({ ok: false, error: "the window for slots/1 is closed", reason: "rules" as const }),
-      undo: async () => ({ ok: true }),
-    });
-    if (!run.ok) throw new Error(run.problems.join(" "));
-    expect(run.pages[0]?.presses[0]?.write).toMatchObject({ ok: false, reason: "rules" });
-  }, 120_000);
-
-  it("keeps the author's own id collision apart from a rules refusal", async () => {
-    // `already-taken` under `idFrom: "auth.uid"` is the AUTHOR's record, and says nothing about a
-    // visitor. Carried through as its own reason so the report can say which it was.
-    const run = await runPagesHeadless([page("works", WORKS)], {
-      write: async () => ({ ok: false, error: "already-taken", reason: "taken" as const }),
-      undo: async () => ({ ok: true }),
-    });
-    if (!run.ok) throw new Error(run.problems.join(" "));
-    expect(run.pages[0]?.presses[0]?.write).toMatchObject({ ok: false, reason: "taken" });
-  }, 120_000);
-
-  it("never writes a confirmation the page raised before the button was pressed", async () => {
-    // `pending` is ONE cell holding whatever is unanswered, so reading it alone accepts the
-    // confirmation a page made at LOAD and attributes the write to a button that did nothing —
-    // a real record, made and removed, for an inert control, and missing from that press's own
-    // account of itself because `submitted` is correctly null. The count is what tells them apart.
-    const wrote: string[] = [];
-    const run = await runPagesHeadless([page("onload", SUBMITS_ON_LOAD)], {
-      write: async (_cid, values) => {
-        wrote.push(values.name ?? "");
-        return { ok: true, token: `t${wrote.length}` };
-      },
-      undo: async () => ({ ok: true }),
-    });
-    if (!run.ok) throw new Error(run.problems.join(" "));
-    // The page DID submit on load — that is the finding, and it is still reported...
-    expect(run.pages[0]?.submittedOnLoad).toBeGreaterThan(0);
-    // ...and its button is inert, so nothing was pressed into existence and NOTHING was written.
-    expect(run.pages[0]?.presses[0]?.submitted).toBeNull();
-    expect(run.pages[0]?.presses[0]?.write).toBeNull();
-    expect(wrote).toEqual([]);
-  }, 120_000);
-
-  it("does not credit the click with a submission the page reissued while being declined", async () => {
-    // The race the pre-decline opened. Declining SETTLES the page's own `submit()` promise, and a
-    // page may submit again from that promise's `false` branch — before the click. Measured from a
-    // `before` captured above the decline, that resubmission is counted as this control's work: a
-    // real record for a button that does nothing.
-    const wrote: string[] = [];
-    const run = await runPagesHeadless([page("resubmits", RESUBMITS_ON_DECLINE)], {
-      write: async (_cid, values) => {
-        wrote.push(values.name ?? "");
-        return { ok: true, token: `t${wrote.length}` };
-      },
-      undo: async () => ({ ok: true }),
-    });
-    if (!run.ok) throw new Error(run.problems.join(" "));
-    // The button is inert. Whatever the page did to itself, nothing was pressed into existence...
-    expect(run.pages[0]?.presses[0]?.submitted).toBeNull();
-    // ...and NOTHING was written. This is the assertion: a write here is a record in a real app,
-    // made on behalf of a control nobody can blame.
-    expect(wrote).toEqual([]);
-  }, 120_000);
-
-  it("writes nothing on a page that submits from a timer, however the counts line up", async () => {
-    // The general case, and the one no amount of before/after counting solves: a submission can
-    // arrive during a press for reasons that have nothing to do with it, and the parent cannot tell
-    // the two apart. So the page is watched doing nothing first, and a page that submits while
-    // nobody is pressing gets no writes at all — the destructive reading is the one to refuse when
-    // cause is unknowable.
-    const wrote: string[] = [];
-    const run = await runPagesHeadless([page("timer", SUBMITS_ON_A_TIMER)], {
-      write: async (_cid, values) => {
-        wrote.push(values.name ?? "");
-        return { ok: true, token: `t${wrote.length}` };
-      },
-      undo: async () => ({ ok: true }),
-    });
-    if (!run.ok) throw new Error(run.problems.join(" "));
-    expect(run.pages[0]?.submitsUnprompted).toBe(true);
-    expect(wrote).toEqual([]);
-    expect(run.pages[0]?.presses[0]?.writeWithheld).toBe(true);
-  }, 120_000);
-
-  it("does not abandon a write that outlasts the browser deadline", async () => {
-    // THE OTHER HALF of the same fix. Every question put to the browser is bounded by
-    // `evaluateMs`; a write made on the far side of that bound would be abandoned by the run while
-    // the database went on to accept it — a real record nothing reports and nothing removes. The
-    // write happens in Node now and is awaited there, so a slow one is simply slow.
-    const undone: string[] = [];
-    const run = await runPagesHeadless([page("works", WORKS)], {
-      write: async () => {
-        await new Promise((resolve) => setTimeout(resolve, LIMITS.evaluateMs + 1500));
-        return { ok: true, token: "slow" };
-      },
-      undo: async (token) => {
-        undone.push(token);
-        return { ok: true };
-      },
-    });
-    if (!run.ok) throw new Error(run.problems.join(" "));
-    expect(run.pages[0]?.presses[0]?.write).toMatchObject({ ok: true, cleanup: "removed" });
-    expect(undone).toEqual(["slow"]);
-  }, 180_000);
 
   it("photographs each page, and names where the picture went", async () => {
     // The pane's last advantage handed over: a person looking at the screen. The file has to
