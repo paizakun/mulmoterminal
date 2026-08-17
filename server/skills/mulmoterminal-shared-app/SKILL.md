@@ -168,7 +168,8 @@ stop the others being scanned):
 **`datetime` is a wall clock, not an instant.** `YYYY-MM-DDTHH:MM`, seconds optional, **no timezone
 suffix**. `new Date(...).toISOString()` is the reflex and it is wrong twice: the `Z` is refused at
 publish, and the time SHIFTS into whatever timezone this machine is in — a Tokyo court's 08:00
-becomes `15:00Z` when the script runs in Seattle. Had the format been accepted, the app would have
+becomes `15:00Z` when the script runs in Seattle — `16:00Z` for the same 08:00 in winter, because the
+offset moves too. Had the format been accepted, the app would have
 published with every row seven hours out. Build the string from its parts
 (`` `${dateKey}T${hh}:00` ``). A `stampField`'s `…Z` (step "limited number of places") is the one
 `datetime` shaped that way, and the rules write it — no script does.
@@ -187,8 +188,13 @@ read and the write. `create` has the host refuse a colliding row instead.
 **And then read `rejected`.** It is not a count and not only about collisions: `putItems` returns
 `{ written, rejected }` with one `{ id, problem }` per refused row, and the `problem` is as likely
 to be a missing required field or an unknown `enum` value as an id that already existed. So go
-through them: the ones that already existed are the refill working, and every other `problem` is a
-row that was NOT written and needs fixing and re-sending — just that row.
+through them: every `problem` that is not "already exists" is a row that was NOT written, and it
+needs fixing and re-sending — just that row.
+
+And "already exists" says exactly that much. It does not say the stored row is the row you
+generated: something else wrote that id (that is the gap `create` closes), and `create` cannot
+correct it. If it matters — a regeneration that changes what a slot should say — read those ids back
+with `getItems` and compare before calling them done.
 
 ### 3. RUN THE PAGE. Not reading it — running it.
 
