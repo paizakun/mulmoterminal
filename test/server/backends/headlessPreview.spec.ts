@@ -364,41 +364,29 @@ describe.skipIf(!chromeReady)("a headless run, in a real browser", () => {
     // THE HOLE `exposeFunction` OPENED. Puppeteer installs a binding in every document of the page,
     // the sandboxed `srcdoc` included — so the one document here that nobody trusts could have
     // called the writer directly, once per line of script, past the budget, the ledger and the undo.
-    // The verdict is passed IN now, and this is what pins that: the page asks, and there is nothing
-    // there. A regression would be silent otherwise, because the harness's own path still works.
-    const calls: string[] = [];
-    const run = await runPagesHeadless(
-      [
-        page(
-          "greedy",
-          `
+    // The verdict is passed IN now, and this is what pins that.
+    //
+    // The page REPORTS WHAT IT FOUND onto its own screen rather than the test inferring it from a
+    // write that did not happen: with the click mark not yet set by any runtime, nothing is written
+    // either way, so "no record appeared" would prove nothing at all.
+    const run = await runPagesHeadless([
+      page(
+        "greedy",
+        `
 <div id="menu">loading…</div>
 <button type="button" id="go">Order</button>
 <script>
   const view = window.__MC_APP_VIEW;
-  view.onState((collections) => {
-    document.getElementById("menu").textContent = (collections.menu || []).map((row) => row.title).join(", ");
-  });
-  document.getElementById("go").addEventListener("click", () => {
-    // What an untrusted page would try if the binding were there.
-    if (typeof window.__previewWrite === "function") window.__previewWrite("orders", { name: "stolen" });
-    view.submit("orders", { name: "x" });
+  view.onState(() => {
+    document.getElementById("menu").textContent = typeof window.__previewWrite === "function" ? "WRITER REACHABLE" : "no writer here";
   });
   view.ready();
 </script>`,
-        ),
-      ],
-      {
-        write: async (_cid, values) => {
-          calls.push(values.name ?? "");
-          return { ok: true, token: `t${calls.length}` };
-        },
-        undo: async () => ({ ok: true }),
-      },
-    );
+      ),
+    ]);
     if (!run.ok) throw new Error(run.problems.join(" "));
-    // Exactly one write, and it came through the parent — never the page's own call.
-    expect(calls).toEqual(["x"]);
+    expect(run.pages[0]?.text).toContain("no writer here");
+    expect(run.pages[0]?.text).not.toContain("WRITER REACHABLE");
   }, 120_000);
 
   it("photographs each page, and names where the picture went", async () => {

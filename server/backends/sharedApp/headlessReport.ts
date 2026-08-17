@@ -90,9 +90,13 @@ function writeLines(write: HeadlessWrite): string[] {
  *  one are opposite findings about a button, and silence here would read as the first. */
 /** A press on a page that submits by itself. The submission is real and so is the press; what is
  *  unknowable is whether one caused the other, and a write is not something to do on a guess. */
+/** A submission the runtime did not vouch for. The submission is real and so is the press; what is
+ *  missing is any evidence that one caused the other, and a write is not something to do on a
+ *  guess. Today this is every submission — the published runtime does not set the mark yet. */
 const WITHHELD_WRITE =
-  "    It was DECLINED rather than written, because this page submits WITHOUT being pressed (see above). A submission arriving during a press cannot be told from one " +
-  "the press caused, so writing here would put a real record in the app on behalf of a control that may have done nothing.";
+  "    It was DECLINED rather than written: the submission did not carry a mark from the runtime saying it was made during a click dispatch, so nothing establishes " +
+  "that THIS control caused it. A page can submit from a timer or `onState` just as easily, and a record in a real app needs a better reason than arriving at the " +
+  "right moment.";
 
 const SKIPPED_WRITE =
   "    It was DECLINED rather than written: this run had already spent its budget of real writes. The submission is wired; what the rules would say about THIS one was not asked.";
