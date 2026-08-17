@@ -142,9 +142,19 @@ export interface HeadlessPress {
    *  this run did not write it.
    *
    *  Its own flag, and not `writeSkipped`: one is a budget this run spent, the other is a
-   *  submission whose CAUSE is unestablished. Today it is every submission — the published runtime
-   *  does not set the mark yet (`GESTURE_MARK`) — and that is the fail-closed direction: a record
-   *  in somebody's real app needs a reason, and "it turned up while I was clicking" is not one. */
+   *  submission whose CAUSE is unestablished. A record in somebody's real app needs a reason, and
+   *  "it turned up while I was clicking" is not one.
+   *
+   *  An app pinned to a runtime older than 0.9.0 marks nothing at all, so every submission is
+   *  withheld and nothing is written. That is not a broken page.
+   *
+   *  The one that surprises authors: a handler that `await`s work which actually yields
+   *  (`await validate()` doing I/O) resumes in a later task, so its submission lands here and is
+   *  not written. Awaiting an already-resolved promise does not — see `GESTURE_MARK`.
+   *
+   *  A control that saves from its own `change` handler does NOT land here, and the difference
+   *  matters: `CLICKABLE` never selects it, so there is no press and therefore no flag — the save
+   *  path is simply not covered, silently. */
   writeWithheld: boolean;
   /** The browser reported a form submission the sandbox blocked. The page cannot see this happen —
    *  the `submit` event never fires, so `preventDefault()` never runs — and neither can the author,
@@ -1066,7 +1076,16 @@ const repositoryWriter = (root: string): PreviewWriter => ({
  *
  *  The projection comes from `previewSharedApp`, which is what the pane asks too — so what runs
  *  here is what the author would see there, and neither is a rehearsal of the other. */
-export async function headlessPreview(root: string): Promise<HeadlessRun> {
+/** Run every page this app declares and report what happened.
+ *
+ *  `write` IS OFF BY DEFAULT, and that is the safety boundary rather than the undo. Accepting a
+ *  confirmation puts a real record in the live app — briefly, but a creation is not always
+ *  reversible by deleting the row: rules, functions or an integration may act on it, notifications
+ *  may already have gone out, and `cleanup` can itself fail (the report has a field for exactly
+ *  that). A diagnostic the agent reaches for after every edit must not do any of that unasked, so
+ *  the caller has to say `confirm: true` — the same word `publish` uses for "I accept a real
+ *  consequence". Raised in review of #1770 by two reviewers independently. */
+export async function headlessPreview(root: string, opts: { write?: boolean } = {}): Promise<HeadlessRun> {
   const preview = await previewSharedApp(root);
   if (!preview.ok) return { ok: false, problems: preview.problems };
   if (preview.pages.length === 0) {
@@ -1087,5 +1106,5 @@ export async function headlessPreview(root: string): Promise<HeadlessRun> {
     ...(page.viewer === undefined ? {} : { viewer: page.viewer }),
     submit: Object.keys(preview.submit).length > 0 ? preview.submit : null,
   }));
-  return runPagesHeadless(inputs, repositoryWriter(root));
+  return runPagesHeadless(inputs, opts.write === true ? repositoryWriter(root) : null);
 }

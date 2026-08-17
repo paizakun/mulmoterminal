@@ -10,10 +10,9 @@ Entries here are folded into the next release's heading when it ships.
 
 ## mulmoterminal@4.9.0 — 2026-08-17
 
-> **Setup guide:** [The prompts pane, and shared apps lose their staging step](https://receptron.github.io/mulmoterminal/guide/en/v4.9.0.html) — written at release time. ([日本語](https://receptron.github.io/mulmoterminal/guide/ja/v4.9.0.html))
+> **Setup guide:** [The prompts pane](https://receptron.github.io/mulmoterminal/guide/en/v4.9.0.html) — written at release time. ([日本語](https://receptron.github.io/mulmoterminal/guide/ja/v4.9.0.html))
 
-One new panel and one concept removed. The panel answers "what did I ask *this* cell?"; the removal
-takes shared apps from three states down to two.
+One new panel, which answers "what did I ask *this* cell?".
 
 ### A pane for the prompts you sent (#1748, #1749)
 
@@ -57,32 +56,10 @@ scan reads comes from **one file handle** rather than a path re-resolved per rea
 land on two different files across two reads, and a reader that folds a range and then checks
 something else about "the file" has no way to say the two saw the same one.
 
-### Shared apps: staging is gone (#1760, #1761)
-
-An app was in one of three states — draft, staged, published — and the middle one earned its
-keep only while there was no way to see a page before publishing it. There is now (see below), so
-the state is a step with nothing behind it. An app is either **present** or **published**.
-
-### Shared apps: run the page before publishing it (#1738, #1742, #1728, #1743, #1745)
-
-The preview runs the page from the terminal, so what breaks, breaks on your machine instead of on
-a reader's. Two failures the sandbox used to swallow are now warnings rather than silence, and
-whatever the preview reported can be carried out in a single copy.
-
-`#1743` is the one worth reading if you used the preview and did not trust it: headless preview
-reported **every** page as unresponsive, so a working app looked broken.
-
-### Shared apps: the server-time field (#1739, #1744, #1746, #1747, #1752)
-
-A field that records when the server wrote a row was specified but never actually written. It is
-written now, its shape is stated in the template and the skill, and a regression test pins the
-field order so the next schema edit cannot quietly reorder it.
-
 ### Fixes
 
 - **The dev server restarted forever on a port collision (#1735, #1736).** A port already in use
   made it exit, which made it restart, which made it exit. It now reports the collision and stops.
-- **A shared-app pane did not pass `viewer` to roster-facing pages (#1756).**
 - **`collection-plugin` is on 4.2.0 (#1754)**, and a recorded timestamp is no longer editable from
   the pane — it is the server's record, not a field.
 - **The Windows PTY specs get a 60-second timeout (#1740, #1741).** They drive a real PTY, and the
@@ -92,8 +69,7 @@ field order so the next schema edit cannot quietly reorder it.
 
 `#1755` records the design for reading a Claude transcript on the phone — the terminal screen
 cannot answer it, because claude runs in the alternate screen where tmux keeps no scrollback
-(measured: `alt=1 hist=0` on 11 of 12 live sessions). `#1759` is the design for connecting the
-three shared-app entry points through the toolbar. `#1734` is 4.8.5's setup guide.
+(measured: `alt=1 hist=0` on 11 of 12 live sessions). `#1734` is 4.8.5's setup guide.
 
 ### Docs housekeeping
 

@@ -2,11 +2,10 @@
 //
 // WHAT A HEADLESS RUN DOES WITH A CONFIRMATION, tested without a browser.
 //
-// Its own file, and the reason is a change in what the browser can prove. Writing is gated on the
-// runtime marking a submission as caused by a click (`GESTURE_MARK`), and the published runtime
-// does not set that mark yet — so in a real browser NOTHING is written, and every assertion about
-// the write path would be an assertion about the gate refusing. The gate has its own test next
-// door, in `headlessPreview.spec.ts`, where a real page is really pressed.
+// Its own file, and the split is by what needs a browser. Writing is gated on the runtime marking
+// a submission as caused by a click (`GESTURE_MARK`), and only a real browser dispatching a real
+// click can produce that mark — so the GATE is tested next door in `headlessPreview.spec.ts`,
+// where real pages are really pressed and the published runtime really marks them.
 //
 // What is left to check is the decision and what follows it: who is asked, in what order, what is
 // undone, and what is reported when each of those goes wrong. None of that needs Chrome — it needs

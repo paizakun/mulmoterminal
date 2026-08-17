@@ -94,6 +94,8 @@ const props = defineProps<{
   cancelUid: number | null;
   defaultCwd: string | null;
   presets: CwdPreset[];
+  // The saved directories could not be read — handed down so the launch form can say so.
+  configUnavailable?: boolean;
   launchers: Launcher[];
   // The user's own ways of starting Claude Code, for the Agent Picker in an empty cell (#1414).
   // Optional, unlike `launchers`: an install with none configured is the normal case, and the
@@ -119,6 +121,8 @@ const emit = defineEmits<{
   (e: "park", uid: number, value: boolean): void;
   // Shared preset list events — uid-less since they mutate the one config list.
   (e: "record-cwd" | "remove-preset", value: string): void;
+  // Read the config again, after it could not be read at all — uid-less for the same reason.
+  (e: "retry-config"): void;
 }>();
 
 const gridStyle = computed(() => trackStyle(layoutForCount(props.cells.length)));
@@ -1415,6 +1419,7 @@ watch(
           :initial-agent="cell.agent"
           :auto-start="cell.autoStart === true"
           :presets="presets"
+          :config-unavailable="configUnavailable === true"
           :launchers="launchers"
           :custom-agents="customAgents ?? []"
           :open-session-ids="openSessionIds"
@@ -1428,6 +1433,7 @@ watch(
           @cwd="(c) => emit('cwd', cell.uid, c)"
           @record-cwd="(c) => emit('record-cwd', c)"
           @remove-preset="(path) => emit('remove-preset', path)"
+          @retry-config="emit('retry-config')"
           @run="(cmd) => emit('run', cell.uid, cmd)"
           @run-spare="(cmd) => emit('runSpare', cell.uid, cmd)"
           @launch="(pick) => emit('launch', cell.uid, pick)"

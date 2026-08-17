@@ -48,6 +48,62 @@ const submit = { orders: { createFields: ["name"] } };
  *
  *  The file input is here deliberately: a browser refuses a non-empty value on one, and the throw
  *  used to take the whole run with it — an app with an upload control reported nothing at all. */
+/** A page that must leave NO record behind, checked for the reason it leaves none.
+ *
+ *  The three that must not write are not variations on one idea, and collapsing them to "nothing
+ *  was written" would lose what each is guarding:
+ *
+ *  - `onload` / `resubmits` submit BEFORE the press. The run clears that confirmation, so the press
+ *    itself raises nothing: `pressSubmitted` false and `withheld` FALSE, because there was no
+ *    submission to withhold. What they did is reported as `submittedOnLoad`, which is also the
+ *    finding a visitor would care about — they are shown a dialog nobody asked for.
+ *  - `timer` submits DURING the press. The press really does see a submission arrive, which is the
+ *    exact shape that made every counting-based design write a record for a button that does
+ *    nothing. It is refused on the only ground that is not a guess: the runtime did not mark it.
+ *
+ *  Its own function because the assertions are the same three lines with different answers, and
+ *  because inlining all four pages put the test over the complexity limit. */
+function expectNoRecord(pages: HeadlessPageReport[], id: string, want: { submittedOnLoad: number; pressSubmitted: boolean; withheld: boolean }): void {
+  const page = pages.find((pg) => pg.id === id);
+  expect(page, id).toBeDefined();
+  expect(page?.submittedOnLoad, id).toBe(want.submittedOnLoad);
+  expect(page?.presses[0]?.submitted !== null, id).toBe(want.pressSubmitted);
+  expect(page?.presses[0]?.writeWithheld, id).toBe(want.withheld);
+  expect(page?.presses[0]?.write, id).toBeNull();
+}
+
+/** A button whose handler awaits an ALREADY-RESOLVED promise before submitting.
+ *
+ *  The continuation is queued as a microtask while the listener is still on the stack, so it runs
+ *  at the checkpoint the dispatch takes between listeners — before `eventPhase` resets. */
+const AWAITS_A_MICROTASK = `
+<button type="button" id="go">Order</button>
+<script>
+  const view = window.__MC_APP_VIEW;
+  view.onState(() => {});
+  view.ready();
+  document.getElementById("go").addEventListener("click", async () => {
+    await Promise.resolve();
+    view.submit("orders", { name: "after a microtask" });
+  });
+</script>`;
+
+/** The same shape, but awaiting REAL async work — the case a reviewer is right to ask about.
+ *
+ *  `await validate()` where validating actually yields puts the continuation in a later task, and a
+ *  later task is not the dispatch however short the wait was. */
+const AWAITS_REAL_WORK = `
+<button type="button" id="go">Order</button>
+<script>
+  const view = window.__MC_APP_VIEW;
+  view.onState(() => {});
+  view.ready();
+  document.getElementById("go").addEventListener("click", async () => {
+    await new Promise((r) => setTimeout(r, 0));
+    view.submit("orders", { name: "after real async work" });
+  });
+</script>`;
+
 const WORKS = `
 <div id="menu">loading…</div>
 <input id="name">
@@ -134,18 +190,28 @@ const RESUBMITS_ON_DECLINE = `
   view.submit("orders", { name: "nobody asked" }).then(again, again);
 </script>`;
 
-/** A page whose button does nothing and which submits from a TIMER, long after it loaded.
+/** A page that submits from a TIMER the click arms, in the very next task.
  *
- *  Nothing is pending when the press happens and nothing was pending at the mount, so every
- *  counting-based defence sees a submission appear "because of" the click. It did not. This is the
- *  page that decides whether the run writes on a guess. */
+ *  Nothing is pending at the mount and nothing is pending when the press happens, so every
+ *  counting-based defence sees a submission appear "because of" the click — and here it even IS
+ *  caused by it, in the loose sense. The contract is not about loose causation: the submission is
+ *  made from a later task, the dispatch is over, and there is no way to tell it apart from a timer
+ *  that was going to fire anyway. This is the page that decides whether the run writes on a guess.
+ *
+ *  ARMED BY THE CLICK, at zero delay, rather than by a fixed wall-clock delay from load (review of
+ *  #1770). A constant had to be long enough to survive mounting, settling, input filling and the
+ *  pre-press observation on a loaded CI runner, and short enough to land inside the press window —
+ *  a range that does not exist reliably. Arming it from the handler makes the ordering a fact
+ *  rather than a bet, and does not weaken the case: a task is a task however it was scheduled. */
 const SUBMITS_ON_A_TIMER = `
 <button type="button" id="go">Order</button>
 <script>
   const view = window.__MC_APP_VIEW;
   view.onState(() => {});
   view.ready();
-  setTimeout(() => { view.submit("orders", { name: "a timer did this" }); }, 800);
+  document.getElementById("go").addEventListener("click", () => {
+    setTimeout(() => { view.submit("orders", { name: "a timer did this" }); }, 0);
+  });
 </script>`;
 
 /** A page that rearranges its own controls when an input is filled.
@@ -320,15 +386,53 @@ describe.skipIf(!chromeReady)("a headless run, in a real browser", () => {
     expect(unreachable?.presses[1]?.submitted).toBeNull();
   });
 
-  it("WRITES NOTHING against a real page, because no runtime marks a submission yet", async () => {
+  it("marks a handler that awaits a MICROTASK, and withholds one that awaits real async work", async () => {
+    // THE LINE INSIDE `async`, measured rather than reasoned about (review of #1770).
+    //
+    // Both pages look identical in source — `async () => { await …; view.submit(…) }` — and they
+    // land on opposite sides, because what matters is WHEN the continuation is queued:
+    //
+    //   await Promise.resolve()  the continuation is queued while the listener is still on the
+    //                            stack, so it runs at the microtask checkpoint the dispatch takes
+    //                            after that listener. `eventPhase` has not reset. MARKED.
+    //   await <real async work>  the continuation is queued from a later task. The dispatch ended
+    //                            long before. NOT marked, and no wait makes it so.
+    //
+    // The second is the common shape (`await validate()` that actually does I/O), so it is the one
+    // the documentation must warn about — an author whose save silently does nothing in preview
+    // needs to be told this is the reason, not left to conclude the button is broken.
+    const wrote: string[] = [];
+    const run = await runPagesHeadless([page("micro", AWAITS_A_MICROTASK), page("real", AWAITS_REAL_WORK)], {
+      write: async (_cid, values) => {
+        wrote.push(values.name ?? "");
+        return { ok: true, token: `t${wrote.length}` };
+      },
+      undo: async () => ({ ok: true }),
+    });
+    if (!run.ok) throw new Error(run.problems.join(" "));
+    expect(wrote).toEqual(["after a microtask"]);
+    const micro = run.pages.find((pg) => pg.id === "micro");
+    expect(micro?.presses[0]?.writeWithheld).toBe(false);
+    expect(micro?.presses[0]?.write).toMatchObject({ ok: true });
+    // Submitted for real, and still not written. Both halves matter: the page is not broken, the
+    // cause simply cannot be established from a later task.
+    const real = run.pages.find((pg) => pg.id === "real");
+    expect(real?.presses[0]?.submitted).toEqual({ cid: "orders", fields: ["name"] });
+    expect(real?.presses[0]?.writeWithheld).toBe(true);
+    expect(real?.presses[0]?.write).toBeNull();
+  }, 240_000);
+
+  it("writes for the pressed button and for NONE of the three pages that submit by themselves", async () => {
     // THE GATE, against four pages that each break a different guess somebody might make about
     // cause: the ordinary one, the one that submits on load, the one that resubmits the moment its
-    // confirmation is answered, and the one whose timer fires later. None of their submissions
-    // carries the runtime's mark (`GESTURE_MARK`), so none is written — and that is the whole of
-    // the rule, with no window and no counting anywhere near it.
+    // confirmation is answered, and the one whose timer fires later. Only the first submits from
+    // inside the click's dispatch, so only the first carries the runtime's mark (`GESTURE_MARK`)
+    // and only the first is written — with no window and no counting anywhere near it.
     //
-    // This is the test that will change when `@receptron/sharedapp` starts marking: the first page
-    // will write, and the other three still must not.
+    // Against a REAL browser and the REAL published runtime: the harness serves
+    // `node_modules/@receptron/sharedapp/dist/view`, so this goes red if a future version stops
+    // marking — which is the failure no unit test in this repo can see, because the mark can only
+    // be produced by a browser dispatching a real click.
     const wrote: string[] = [];
     const run = await runPagesHeadless(
       [page("works", WORKS), page("onload", SUBMITS_ON_LOAD), page("resubmits", RESUBMITS_ON_DECLINE), page("timer", SUBMITS_ON_A_TIMER)],
@@ -341,12 +445,17 @@ describe.skipIf(!chromeReady)("a headless run, in a real browser", () => {
       },
     );
     if (!run.ok) throw new Error(run.problems.join(" "));
-    expect(wrote).toEqual([]);
-    // The submission REACHED the parent on the ordinary page — that half is proven, and it is what
-    // the run is for. What was not established is that the press caused it.
+    // ONE write, and it is the pressed button's — `"preview"` is what the run fills a bare text
+    // input with. Asserting the VALUE rather than the count is the point: a run that wrote
+    // "a timer did this" instead would also have written exactly once.
+    expect(wrote).toEqual(["preview"]);
     expect(run.pages[0]?.presses[0]?.submitted).toEqual({ cid: "orders", fields: ["name"] });
-    expect(run.pages[0]?.presses[0]?.writeWithheld).toBe(true);
-    expect(run.pages[0]?.presses[0]?.write).toBeNull();
+    expect(run.pages[0]?.presses[0]?.writeWithheld).toBe(false);
+    expect(run.pages[0]?.presses[0]?.write).toMatchObject({ cid: "orders", ok: true, cleanup: "removed" });
+    // The other three are unwritten for two DIFFERENT reasons — see `expectNoRecord`.
+    expectNoRecord(run.pages, "onload", { submittedOnLoad: 1, pressSubmitted: false, withheld: false });
+    expectNoRecord(run.pages, "resubmits", { submittedOnLoad: 1, pressSubmitted: false, withheld: false });
+    expectNoRecord(run.pages, "timer", { submittedOnLoad: 0, pressSubmitted: true, withheld: true });
   }, 240_000);
 
   it("writes nothing when it is given no writer, which is every run a test drives", async () => {

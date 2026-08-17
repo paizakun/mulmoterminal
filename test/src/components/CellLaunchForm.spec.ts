@@ -25,7 +25,14 @@ function mockFetch(worktrees: WorktreeRow[] = [], sessions: SessionRow[] = []) {
 
 const mountForm = (
   openSessionIds: string[] = [],
-  over: { dir?: string; presets?: { label: string; path: string }[]; agent?: AgentPick; defaultCwd?: string | null; customAgents?: CustomAgent[] } = {},
+  over: {
+    dir?: string;
+    presets?: { label: string; path: string }[];
+    agent?: AgentPick;
+    defaultCwd?: string | null;
+    customAgents?: CustomAgent[];
+    configUnavailable?: boolean;
+  } = {},
 ) =>
   mount(CellLaunchForm, {
     // defaultCwd is deliberately NOT "/repo": the launcher treats the workspace differently — it
@@ -1186,5 +1193,28 @@ describe("removing a worktree", () => {
     finish();
     await flushPromises();
     expect(w.find('[data-testid="wt-error"]').text()).toContain("uncommitted changes");
+  });
+});
+
+// An empty chip row has two very different causes, and they used to look identical: a user who has
+// opened no directories, and a config that could not be read at all. The second one now says so —
+// and offers the only move left, since nothing else re-reads the config once the retries give up.
+describe("CellLaunchForm — the config could not be read", () => {
+  it("says nothing while the config is merely empty", async () => {
+    const w = mountForm([], { presets: [] });
+    await flushPromises();
+
+    expect(w.find('[data-testid="cell-config-unavailable"]').exists()).toBe(false);
+  });
+
+  it("explains the empty chip row and offers another read", async () => {
+    const w = mountForm([], { presets: [], configUnavailable: true });
+    await flushPromises();
+
+    const notice = w.find('[data-testid="cell-config-unavailable"]');
+    expect(notice.exists()).toBe(true);
+
+    await notice.find("button").trigger("click");
+    expect(w.emitted("retry-config")).toHaveLength(1);
   });
 });

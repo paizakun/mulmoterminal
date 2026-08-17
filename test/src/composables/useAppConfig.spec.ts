@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { effectScope } from "vue";
 import { currentGitlabHosts, useAppConfig } from "../../../src/composables/useAppConfig";
 import { globalHeaderStatusColors, globalHeaderStatusTint } from "../../../src/composables/headerStatusColors";
 import { DEFAULT_HEADER_STATUS_TINT } from "../../../common/headerStatusColors";
@@ -424,5 +425,200 @@ describe("useAppConfig — loadConfig validates what the server sends", () => {
     await expect(loadConfig()).resolves.toBeUndefined();
 
     expect(launchers.value).toEqual(before);
+  });
+});
+
+// A page that loads while the backend is restarting gets NOTHING from /api/config — and nothing
+// re-read it, so the launcher showed no saved directories for as long as that tab stayed open. In
+// this repo's own dev loop that is the common case rather than the rare one: Vite keeps serving
+// the page from its own port and answers the proxied /api with a 502 for the seconds the backend
+// takes to come back.
+describe("useAppConfig — loadConfig retries a request that failed", () => {
+  // The fetches a run made, so a test can say how many attempts happened rather than only what
+  // landed. `answers` is consumed one per call; the last one repeats.
+  function mockAttempts(...answers: Array<{ ok: boolean; body?: unknown }>) {
+    const calls: string[] = [];
+    globalThis.fetch = vi.fn(async (url: string) => {
+      calls.push(String(url));
+      const answer = answers[Math.min(calls.length - 1, answers.length - 1)];
+      if (!answer.ok) throw new Error("ECONNREFUSED");
+      return { ok: true, json: async () => answer.body ?? {} };
+    }) as unknown as typeof fetch;
+    return calls;
+  }
+
+  const DOWN = { ok: false };
+  const UP = (body: unknown) => ({ ok: true, body });
+
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("fills the launcher in once the backend comes back", async () => {
+    const calls = mockAttempts(DOWN, DOWN, UP({ cwdPresets: [{ label: "proj", path: "/p" }] }));
+    const { loadConfig, presets } = useAppConfig();
+
+    await loadConfig();
+    expect(presets.value).toEqual([]); // the state the bug left behind — now temporary
+
+    await vi.advanceTimersByTimeAsync(1_500);
+
+    expect(presets.value).toEqual([{ label: "proj", path: "/p" }]);
+    expect(calls).toHaveLength(3);
+  });
+
+  // A retry that the caller had to await would make `onMounted(loadConfig)` block a mount on a
+  // server that may never answer.
+  it("returns from the first attempt instead of awaiting the chain", async () => {
+    mockAttempts(DOWN, UP({ cwdPresets: [{ label: "proj", path: "/p" }] }));
+    const { loadConfig, presets } = useAppConfig();
+
+    await expect(loadConfig()).resolves.toBeUndefined();
+    expect(presets.value).toEqual([]);
+  });
+
+  it("stops rather than polling a server that is down for good", async () => {
+    const calls = mockAttempts(DOWN);
+    const { loadConfig } = useAppConfig();
+
+    await loadConfig();
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    expect(calls).toHaveLength(10); // the initial attempt plus the nine retries
+  });
+
+  // A 200 is the server's real answer even when the body is unusable. Retrying re-reads the same
+  // body, and this spec is also what keeps the other loadConfig tests from leaving a chain running
+  // into the next one.
+  it("does not retry a body of the wrong shape", async () => {
+    const calls = mockAttempts(UP([]));
+    const { loadConfig } = useAppConfig();
+
+    await loadConfig();
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    expect(calls).toHaveLength(1);
+  });
+
+  // The same rule one step earlier: a body that will not PARSE at all. The wrong-shape test above
+  // cannot see this — its `json()` resolves — and with one `try` around the whole read this case
+  // came out the far side as a failed request and armed the chain (Codex on #1771).
+  it("does not retry a body that will not parse", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = vi.fn(async (url: string) => {
+      calls.push(String(url));
+      return {
+        ok: true,
+        json: async () => {
+          throw new SyntaxError("Unexpected end of JSON input");
+        },
+      };
+    }) as unknown as typeof fetch;
+    const { loadConfig } = useAppConfig();
+
+    await expect(loadConfig()).resolves.toBeUndefined();
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    expect(calls).toHaveLength(1);
+  });
+
+  // A non-2xx IS retryable, and it is the shape the dev proxy answers with while the backend is
+  // restarting (502, with a text/plain body that never reaches `json()`).
+  it("retries a 502 from the dev proxy", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = vi.fn(async (url: string) => {
+      calls.push(String(url));
+      return calls.length === 1 ? { ok: false, status: 502 } : { ok: true, json: async () => ({ cwdPresets: [{ label: "proj", path: "/p" }] }) };
+    }) as unknown as typeof fetch;
+    const { loadConfig, presets } = useAppConfig();
+
+    await loadConfig();
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(presets.value).toEqual([{ label: "proj", path: "/p" }]);
+    expect(calls).toHaveLength(2);
+  });
+
+  // Silence for half a minute and then silence forever is the same empty launcher this whole
+  // change exists to explain. When the retries give up, the shell gets something to render.
+  it("reports the config as unavailable only once the retries give up", async () => {
+    mockAttempts(DOWN);
+    const { loadConfig, configUnavailable } = useAppConfig();
+
+    await loadConfig();
+    expect(configUnavailable.value).toBe(false); // still trying — nothing to tell the user yet
+
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(configUnavailable.value).toBe(true);
+  });
+
+  it("takes the notice back when a later read succeeds", async () => {
+    mockAttempts(DOWN);
+    const { loadConfig, configUnavailable } = useAppConfig();
+    await loadConfig();
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(configUnavailable.value).toBe(true);
+
+    mockAttempts(UP({ cwdPresets: [{ label: "proj", path: "/p" }] }));
+    await loadConfig();
+
+    expect(configUnavailable.value).toBe(false);
+  });
+
+  it("abandons the chain when the scope that started it goes away", async () => {
+    const calls = mockAttempts(DOWN);
+    const scope = effectScope();
+    await scope.run(async () => {
+      const { loadConfig } = useAppConfig();
+      await loadConfig();
+    });
+
+    scope.stop();
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    expect(calls).toHaveLength(1);
+  });
+
+  // The same hazard one step in: an attempt that is ALREADY IN FLIGHT when a newer load answers.
+  // It is aborted, but a response that had landed before the abort would otherwise be adopted on
+  // top of the fresh one — and the module-level singletons (launchers, quick commands, the global
+  // settings) have no version guard of their own to catch it (Codex on #1771).
+  it("does not adopt an answer that arrived after a newer load overtook it", async () => {
+    let releaseStale: () => void = () => {};
+    const stalled = new Promise<void>((resolve) => (releaseStale = resolve));
+    let call = 0;
+    globalThis.fetch = vi.fn(async () => {
+      call += 1;
+      if (call === 1) {
+        await stalled;
+        return { ok: true, json: async () => ({ launchers: [{ label: "stale", command: "old" }] }) };
+      }
+      return { ok: true, json: async () => ({ launchers: [{ label: "fresh", command: "new" }] }) };
+    }) as unknown as typeof fetch;
+
+    const { loadConfig, launchers } = useAppConfig();
+    const first = loadConfig();
+    await loadConfig();
+    expect(launchers.value).toEqual([{ label: "fresh", command: "new" }]);
+
+    releaseStale();
+    await first;
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    expect(launchers.value).toEqual([{ label: "fresh", command: "new" }]);
+  });
+
+  // Two chains writing the same refs is how a stale answer lands on top of a fresh one. A remount
+  // (or an HMR update, which re-runs the shell's setup) is the case that produces it.
+  it("lets a later load supersede the chain an earlier one left running", async () => {
+    const calls = mockAttempts(DOWN);
+    const { loadConfig, presets } = useAppConfig();
+    await loadConfig();
+
+    mockAttempts(UP({ cwdPresets: [{ label: "fresh", path: "/fresh" }] }));
+    await loadConfig();
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    expect(presets.value).toEqual([{ label: "fresh", path: "/fresh" }]);
+    expect(calls).toHaveLength(1); // the abandoned chain never fired again
   });
 });

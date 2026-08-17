@@ -1,4 +1,4 @@
-import { ref, type Ref } from "vue";
+import { getCurrentScope, onScopeDispose, ref, type Ref } from "vue";
 import { presetLabel, type CwdPreset } from "../components/presets";
 import { isManagedWorktreePath, worktreeLabel } from "../../common/worktreePath";
 import type { Launcher } from "../components/launchers";
@@ -30,6 +30,12 @@ import { setSessionIdleReapDays } from "./sessionReap";
 import { setHeaderConfigSummary } from "./headerConfigSummary";
 import { postConfigField } from "./postConfigField";
 import { fetchWithTimeout } from "../utils/fetchWithTimeout";
+import { configRetryDelayMs } from "./configRetryPolicy";
+
+// Waiting between retry attempts. `setTimeout` rather than anything cancellable: a chain that
+// has been superseded checks its generation after the sleep, so an abandoned one costs a timer
+// that fires into a `return` and nothing else.
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // The custom attention-sound file is a SINGLETON ref shared across every
 // useAppConfig() caller — the beep player lives in the single view while the
@@ -84,15 +90,19 @@ const worktreesRoot = ref<string | null>(null);
 // the root rather than decide without it (Codex on #1543). Null when nothing is loading — then
 // there is nothing to wait for. It never rejects and `fetchWithTimeout` bounds it, so a dead
 // server delays one chip instead of stalling the queue.
-let configLoadInFlight: Promise<void> | null = null;
+let configLoadInFlight: Promise<unknown> | null = null;
 
 /** Run a config load, publishing it as the in-flight one for the duration — what a preset record
- *  waits on when it needs the worktree root before it can decide. */
-async function trackConfigLoad(load: () => Promise<void>): Promise<void> {
+ *  waits on when it needs the worktree root before it can decide.
+ *
+ *  ONE ATTEMPT, never the retry chain that may follow it (see `loadConfig`). The waiter above is
+ *  bounded by `fetchWithTimeout`; publishing a chain that sleeps between attempts would make a
+ *  restarting backend hold a chip's recording for half a minute instead of one request. */
+async function trackConfigLoad<T>(load: () => Promise<T>): Promise<T> {
   const run = load();
   configLoadInFlight = run;
   try {
-    await run;
+    return await run;
   } finally {
     // Only when a LATER load has not already taken the slot: clearing another's would tell a
     // waiter that nothing is coming.
@@ -518,6 +528,162 @@ async function saveUserMcpServers(next: UserMcpServer[]): Promise<boolean> {
 // line budget without saying anything a reader needed.
 const soundSettings = { soundFile, soundKinds, sounds, saveSound, saveSoundKinds, saveSounds };
 
+/** What one config read has to reach that is not module-level state: the per-call refs and the
+ *  preset manager's version coordination. Passed in rather than closed over so the read itself can
+ *  live out here beside the retry that drives it. */
+interface ConfigReaderDeps {
+  defaultCwd: Ref<string | null>;
+  snapshotVersion: () => number;
+  adoptServerPresets: (list: unknown, capturedVersion: number) => void;
+  migrateLegacyRecents: () => Promise<void>;
+}
+
+/** What one attempt is given: the signal that cancels it when it is no longer wanted, and the
+ *  test for whether its answer is still the one to adopt. */
+interface ReadAttempt {
+  signal: AbortSignal;
+  stale: () => boolean;
+}
+
+type ConfigRead = (attempt: ReadAttempt) => Promise<boolean>;
+
+/** One attempt at reading the config. `true` when the server ANSWERED, adopted or not; `false`
+ *  only when the REQUEST failed (a restarting backend, the dev proxy's 502, a timeout) — the one
+ *  kind of failure a retry can fix, so the only one that arms one.
+ *
+ *  THE SPLIT IS AT THE RESPONSE HEAD, not at the end of the function: everything after a 200 has
+ *  arrived is the server's real answer, whether we can parse it, recognise its shape, or finish
+ *  adopting it. Asking such a server nine more times returns the same body, so the reload is the
+ *  user's move. Keeping one `try` around both halves quietly made a malformed body retryable —
+ *  Codex caught exactly that on #1771. */
+function createConfigReader({ defaultCwd, snapshotVersion, adoptServerPresets, migrateLegacyRecents }: ConfigReaderDeps): ConfigRead {
+  return async function readConfig({ signal, stale }: ReadAttempt): Promise<boolean> {
+    const version = snapshotVersion();
+    let res: Response;
+    try {
+      res = await fetchWithTimeout("/api/config", { signal });
+    } catch {
+      return false; // the request never landed — this is what a retry is for
+    }
+    if (!res.ok) return false;
+    try {
+      const body: unknown = await res.json();
+      // Asked AFTER the body, because that is the await this attempt can lose the race on: a
+      // newer load's answer may already have been adopted while ours was still arriving, and
+      // adopting now would put the older config back (Codex on #1771). The abort covers the
+      // request itself; this covers a response that had already landed when it fired.
+      if (stale()) return true;
+      if (!isRecord(body)) return true;
+      const c = body;
+      defaultCwd.value = typeof c.cwd === "string" ? c.cwd : null;
+      home.value = typeof c.home === "string" ? c.home : null;
+      worktreesRoot.value = typeof c.worktreesRoot === "string" ? c.worktreesRoot : null;
+      adoptServerPresets(c.cwdPresets, version);
+      adoptSoundConfig(c);
+      pushEnabled.value = c.pushEnabled === true;
+      pushKinds.value = listOf(c.pushKinds, isPushKind);
+      adoptRepoConfig(c);
+      adoptListConfig(c);
+      applyGlobalSettings(c);
+      adoptServerSideSettings(c);
+      await migrateLegacyRecents();
+    } catch {
+      // Unreadable, or an adoption step that failed. The screen keeps whatever it already had —
+      // and this still counts as answered, so no retry is armed.
+    }
+    return true;
+  };
+}
+
+/**
+ * The config read, WITH the retry that makes a failed one temporary.
+ *
+ * Nothing else re-reads `/api/config`: it runs once, from the shell's `onMounted`, and every saved
+ * directory, the workspace chip and a dozen global settings come out of it. So one failed request
+ * used to leave the launcher showing no saved directories for as long as the tab stayed open —
+ * indistinguishable from a user who has opened none, with nothing on screen saying otherwise. A
+ * backend that is merely RESTARTING is what produces it, and in this repo's own dev loop that is
+ * routine: Vite keeps serving the page from its own port and answers the proxied `/api` with a 502
+ * for the seconds the backend takes to come back (`scripts/dev-server.mjs` restarts it on every
+ * save under `server/`).
+ *
+ * ONE LOADER PER `useAppConfig()` CALL, like the preset manager beside it: the chain state (which
+ * generation is current, whether the scope is gone) belongs to the caller that loads, and `stale()`
+ * therefore compares against that caller's own generation only. Two live callers do not supersede
+ * each other — which is safe for the reason the caution above `useAppConfig` gives: the shell that
+ * mounts is the one that loads, and everything else takes the values from it. Give a second caller
+ * a `loadConfig` and that stops being true, and a slow attempt of one could adopt over a newer
+ * answer of the other, since the module-level singletons have no version guard of their own.
+ * (CodeRabbit on #1771 read the old wording here as claiming module-level state.)
+ */
+function createConfigLoader(loadOnce: ConfigRead, unavailable: Ref<boolean>): () => Promise<void> {
+  // Which chain is the current one. A second `load()` — a remount, an HMR update — supersedes the
+  // chain the previous one left running, so two of them never race to write the same refs.
+  let generation = 0;
+  // Set when the scope that started a chain goes away: a grid that unmounted has nothing to fill
+  // in, and a chain outliving it would sleep on and write into refs nobody reads.
+  let disposed = false;
+  // The attempt currently in flight, so being superseded (or disposed) CANCELS it rather than
+  // waiting for it to land and be discarded.
+  let inFlight: AbortController | null = null;
+  const abandonInFlight = () => {
+    inFlight?.abort();
+    inFlight = null;
+  };
+  if (getCurrentScope())
+    onScopeDispose(() => {
+      disposed = true;
+      abandonInFlight();
+    });
+
+  /** Arm the next attempt, or `null` when this chain is no longer the one to make it. The check
+   *  and the assignment are one synchronous step on purpose: with an await between them a chain
+   *  that had just been superseded could publish its controller over the current one, and the
+   *  next supersede would then cancel the wrong request. */
+  function arm(mine: number): ReadAttempt | null {
+    if (mine !== generation || disposed) return null;
+    const controller = new AbortController();
+    inFlight = controller;
+    return { signal: controller.signal, stale: () => mine !== generation || disposed };
+  }
+
+  async function attempt(mine: number): Promise<boolean | null> {
+    const armed = arm(mine);
+    if (!armed) return null; // superseded, or the caller is gone
+    const answered = await trackConfigLoad(() => loadOnce(armed));
+    if (inFlight?.signal === armed.signal) inFlight = null;
+    if (armed.stale()) return null;
+    if (answered) unavailable.value = false;
+    return answered;
+  }
+
+  async function retry(mine: number): Promise<void> {
+    for (let round = 0; ; round++) {
+      const delay_ms = configRetryDelayMs(round);
+      // The server is down rather than restarting. Say so — half a minute of silent retrying ends
+      // in the same empty launcher this whole change exists to explain, and the user is the only
+      // one left who can do anything about it (CodeRabbit on #1771).
+      if (delay_ms === null) {
+        unavailable.value = true;
+        return;
+      }
+      await sleep(delay_ms);
+      const answered = await attempt(mine);
+      if (answered !== false) return; // answered, or this chain is no longer the current one
+    }
+  }
+
+  /** The FIRST attempt is awaited, so `onMounted(loadConfig)` still means "the config is here" on
+   *  a healthy server. The retries are deliberately not: they are a background repair, and a mount
+   *  must not block on a server that may never answer. */
+  return async function load(): Promise<void> {
+    abandonInFlight(); // an earlier chain's request must not land on top of this one
+    const mine = ++generation;
+    if ((await attempt(mine)) !== false) return;
+    void retry(mine);
+  };
+}
+
 // Server config (default workspace dir, home, directory presets, custom sound)
 // shared by both the single view and the grid view so each can open the settings
 // modal without duplicating the fetch/save logic.
@@ -536,37 +702,17 @@ export function useAppConfig() {
 
   const { savePresets, recordPreset, removePreset, migrateLegacyRecents, snapshotVersion, adoptServerPresets } = createPresetManager(presets, saving, error);
 
-  const loadConfig = (): Promise<void> => trackConfigLoad(loadConfigOnce);
-
-  async function loadConfigOnce() {
-    const version = snapshotVersion();
-    try {
-      const res = await fetchWithTimeout("/api/config");
-      if (!res.ok) return;
-      const body: unknown = await res.json();
-      if (!isRecord(body)) return;
-      const c = body;
-      defaultCwd.value = typeof c.cwd === "string" ? c.cwd : null;
-      home.value = typeof c.home === "string" ? c.home : null;
-      worktreesRoot.value = typeof c.worktreesRoot === "string" ? c.worktreesRoot : null;
-      adoptServerPresets(c.cwdPresets, version);
-      adoptSoundConfig(c);
-      pushEnabled.value = c.pushEnabled === true;
-      pushKinds.value = listOf(c.pushKinds, isPushKind);
-      adoptRepoConfig(c);
-      adoptListConfig(c);
-      applyGlobalSettings(c);
-      adoptServerSideSettings(c);
-      await migrateLegacyRecents();
-    } catch {
-      // the app still works; presets are just unavailable
-    }
-  }
+  // Whether the config could not be read at all, after the retries gave up — what the launcher
+  // shows instead of pretending the user has no saved directories. Per-call like `presets`, and
+  // filled in for the caller that loads.
+  const configUnavailable = ref(false);
+  const loadConfig = createConfigLoader(createConfigReader({ defaultCwd, snapshotVersion, adoptServerPresets, migrateLegacyRecents }), configUnavailable);
 
   return {
     defaultCwd,
     home,
     presets,
+    configUnavailable,
     prRepos,
     gitlabHosts,
     saveGitlabHosts,

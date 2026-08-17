@@ -35,27 +35,58 @@
 //
 // Design: `plans/feat-shared-app-preview.md` section 7 (P5).
 
+import { GESTURE_MARK } from "@receptron/sharedapp/view";
+
 /** Where the runtime's modules are mounted, relative to the harness page. */
 export const VIEW_MOUNT = "/view";
 
 /** The field on a submit message that says the page made it while handling a real click.
  *
- *  Set by the injected bootstrap in `@receptron/sharedapp`, which is the only code in the same
- *  realm as the event. The contract it has to satisfy, and which nothing here can check:
+ *  RE-EXPORTED, NOT DECLARED. The name is half of a wire contract whose other half is the injected
+ *  bootstrap in `@receptron/sharedapp`, and a copy of a string is exactly the kind of agreement
+ *  that holds until one side is renamed — at which point nothing fails here, every submission
+ *  simply reads as unmarked, and the run quietly stops writing. Importing it makes that a build
+ *  error instead.
  *
- *    true  — `submit()` was called during the dispatch of a TRUSTED click in this document, or in
- *            a microtask of that dispatch. A separate task (a `setTimeout`, a promise settled in an
- *            earlier turn) is NOT that dispatch and must not be marked.
- *    absent or false — everything else.
+ *  What the runtime promises, and nothing on this side can check:
+ *
+ *    true  — `submit()` was called while a TRUSTED click was still being dispatched in that
+ *            document: from a listener, or from a continuation ALREADY QUEUED when the dispatch
+ *            takes its microtask checkpoint (`await Promise.resolve()` qualifies).
+ *    false — everything else. A `setTimeout`, an animation frame, `onState`, a click the page
+ *            dispatched itself — and, importantly, `await` on work that actually yields.
+ *
+ *  THAT LAST ONE IS THE COMMON SHAPE AND IT IS NOT OBVIOUS. These two are identical in source and
+ *  land on opposite sides, because what decides it is when the continuation is queued, not that it
+ *  is `async`:
+ *
+ *    async () => { await Promise.resolve(); view.submit(...) }   marked
+ *    async () => { await validate(); view.submit(...) }          NOT marked, if validate yields
+ *
+ *  So a save that awaits a real check writes nothing in a headless preview. The author must be told
+ *  that is the reason, or they will conclude their button is broken. Pinned against a real browser
+ *  in `headlessPreview.spec.ts` ("marks a handler that awaits a MICROTASK").
  *
  *  It is deliberately a fact about the event loop rather than about elapsed time: a slow handler is
  *  still the handler, and a fast timer is still a timer. That is the whole reason it lives there
  *  and not here — four attempts to decide it from this side by counting and by waiting were each
  *  defeated by a page that simply waited longer (`plans/feat-headless-preview-parity.md`, D-2c).
  *
- *  Until the published runtime sets it, every submission reads as unmarked and this run writes
- *  nothing. Fail-closed by construction rather than by a version check that could be got wrong. */
-export const GESTURE_MARK = "gesture";
+ *  A CHECKBOX OR SELECT THAT SAVES FROM ITS OWN `change` HANDLER IS NEVER MARKED. Activation
+ *  behaviour runs AFTER the click's dispatch has ended, so such a submission is honestly `false`.
+ *  The runtime cannot admit `change` instead — `element.click()` from script produces a trusted
+ *  one — so the choice was between missing a real save-on-toggle and writing records for pages that
+ *  never asked, and it fell on the side that writes nothing.
+ *
+ *  Do not expect to SEE that as a withheld press, though: `CLICKABLE` in `headlessPreview.ts` lists
+ *  button-like controls only, so such a control is never pressed and produces no press line at all.
+ *  The run's own field preparation ticks it and fires `change` before the press window, so whatever
+ *  it submits arrives outside any press. The visible result is a report with nothing in it about a
+ *  save path that was never exercised — which is why the tool description and the skill both have
+ *  to say so out loud. */
+// Re-exported, not `export ... from`: the browser side below reads the field off the wire and so
+// needs the value in scope here too.
+export { GESTURE_MARK };
 
 /** What one rendered document produced, as the browser side collects it. Mirrored on the Node side
  *  by `HeadlessObservation` — the two are one shape crossing `page.evaluate`, so a field added

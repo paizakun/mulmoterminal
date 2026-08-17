@@ -108,6 +108,9 @@ const props = defineProps<
     autoStart?: boolean;
     defaultCwd: string | null;
     presets: CwdPreset[];
+    // The saved directories could not be read at all — passed straight to the launch form, which
+    // says so where the chips would be.
+    configUnavailable?: boolean;
     // Configured launch commands (shell/codex/…) offered next to Claude in this launcher.
     launchers?: Launcher[];
     // The user's own ways of starting Claude Code, offered in this cell's Agent Picker (#1414).
@@ -140,6 +143,9 @@ const emit = defineEmits<
     (e: "agent", value: TerminalAgent): void;
     // Set this cell aside, or bring it back. The grid owns the flag; this only asks.
     (e: "park", value: boolean): void;
+    // The launch form's "try again" on a config that could not be read. Value-less: the shell owns
+    // the read, this only asks for another one.
+    (e: "retry-config"): void;
   }
 >();
 
@@ -1744,6 +1750,7 @@ onUnmounted(() => document.removeEventListener("keydown", onDiffKey));
         :choice="launchChoice"
         :default-cwd="defaultCwd"
         :presets="presets"
+        :config-unavailable="configUnavailable === true"
         :launchers="launchers"
         :custom-agents="customAgents ?? []"
         :open-session-ids="openSessionIds"
@@ -1757,6 +1764,7 @@ onUnmounted(() => document.removeEventListener("keydown", onDiffKey));
         @run="(cmd) => emit('run', cmd)"
         @launch="(pick) => emit('launch', pick)"
         @remove-preset="(path) => emit('remove-preset', path)"
+        @retry-config="emit('retry-config')"
         @close="emit('close')"
       />
     </div>
