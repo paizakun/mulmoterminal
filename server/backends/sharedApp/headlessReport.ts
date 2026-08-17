@@ -92,7 +92,8 @@ function writeLines(write: HeadlessWrite): string[] {
  *  unknowable is whether one caused the other, and a write is not something to do on a guess. */
 /** A submission the runtime did not vouch for. The submission is real and so is the press; what is
  *  missing is any evidence that one caused the other, and a write is not something to do on a
- *  guess. Today this is every submission — the published runtime does not set the mark yet. */
+ *  guess. A page that submits from a timer while the press is being watched lands here, which is
+ *  the case every counting-based design got wrong. */
 const WITHHELD_WRITE =
   "    It was DECLINED rather than written: the submission did not carry a mark from the runtime saying it was made during a click dispatch, so nothing establishes " +
   "that THIS control caused it. A page can submit from a timer or `onState` just as easily, and a record in a real app needs a better reason than arriving at the " +

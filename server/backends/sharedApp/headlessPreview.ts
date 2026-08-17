@@ -142,9 +142,13 @@ export interface HeadlessPress {
    *  this run did not write it.
    *
    *  Its own flag, and not `writeSkipped`: one is a budget this run spent, the other is a
-   *  submission whose CAUSE is unestablished. Today it is every submission — the published runtime
-   *  does not set the mark yet (`GESTURE_MARK`) — and that is the fail-closed direction: a record
-   *  in somebody's real app needs a reason, and "it turned up while I was clicking" is not one. */
+   *  submission whose CAUSE is unestablished. A record in somebody's real app needs a reason, and
+   *  "it turned up while I was clicking" is not one.
+   *
+   *  Two ordinary pages land here and neither is broken. An app pinned to a runtime older than
+   *  0.9.0 marks nothing at all, so every submission is withheld. And a control that saves from a
+   *  `change` handler is withheld on any version, because the mark cannot cover it — see
+   *  `GESTURE_MARK` for why that is the side the failure was put on. */
   writeWithheld: boolean;
   /** The browser reported a form submission the sandbox blocked. The page cannot see this happen —
    *  the `submit` event never fires, so `preventDefault()` never runs — and neither can the author,

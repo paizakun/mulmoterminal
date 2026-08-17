@@ -239,16 +239,33 @@ state (quoted, in the author's own words), a `<form>` in the live document, a bu
 nothing, a submission the declaration refused. **Run it after writing or editing any view, and
 again before you publish.** A page that has never been through it is a page nobody has run.
 
-**It writes NOTHING**, and that is a decision rather than an omission. Accepting a submission would
-put a real record in a real app, and that needs proof that the CLICK caused it — a page can submit
-from a timer, from `onState`, or from a promise settling, and no amount of measuring before and
-after a press tells those apart. The proof has to come from the runtime injected into the page,
-which is in the same realm as the event; it does not mark submissions yet, so nothing is written.
-The machinery is in place and turns on when it does.
+**It WRITES, and then takes it straight back.** When a press produces a submission, the run makes a
+real record in the real app and removes it in the same breath — so the report can tell you what the
+**deployed rules** say, which is the one answer an author most wants before publishing and the one
+no amount of reading the declaration produces. Each line says whether the record went in, why it
+was refused if it was, and **whether the removal succeeded** — a booking left standing occupies a
+real slot, so never skip that part when reading the report back.
 
-So the report proves the page draws, the handshake completes, the records arrive, and **a press
-reaches the parent as a submission the declaration accepts**. It does NOT tell you what the deployed
-rules would say about that submission.
+**Only a submission the runtime marked as caused by the click is written.** A page can submit from a
+timer, from `onState`, or from a promise settling, and no amount of measuring before and after a
+press tells those apart — so the proof comes from the runtime injected into the page, which is in
+the same realm as the event and knows whether `submit()` was called while a real click was being
+dispatched. Everything else is reported as **withheld** and nothing is written for it.
+
+Two ordinary things land in `withheld` and neither is a fault in the page:
+
+- an app pinned to `@receptron/sharedapp` older than **0.9.0** — that runtime marks nothing, so
+  every submission is withheld and the run writes nothing at all;
+- **a control that saves from its own `change` handler** (a checkbox, a select). The browser runs
+  that after the click has finished being dispatched, so it cannot be marked. This is a known cost
+  paid on the side that writes nothing; do not report it to the user as a broken control.
+
+There is also a **budget** on writes. Over it, a confirmation is declined rather than accepted, and
+the run says how many — read that count before concluding every control was exercised.
+
+So the report proves the page draws, the handshake completes, the records arrive, **a press reaches
+the parent as a submission the declaration accepts**, and — for the presses that were written —
+**what the deployed rules said**.
 
 It also **tries to photograph each page**, and gives you the path for every one it managed. Open it
 when the words leave the layout in doubt; that is the one thing prose cannot carry. A page with no
@@ -268,8 +285,9 @@ dialog. **It is deliberately not looser than production**: a preview kinder than
 would be a machine for producing "it worked on my machine".
 
 **Ask the user to open it once the headless run is clean** — it is the half you cannot do, because
-it puts a person in front of the page, and **a person is the proof a write needs**: they saw the
-control, they pressed it, they accepted. That is exactly what `action: "preview"` cannot supply. In
+it puts a person in front of the page and lets them judge how it LOOKS, and because the headless
+run answers as the **author**: it cannot tell you what the rules would say to a visitor or to a
+participant, whose uid is not the author's. In
 the cell open on this repository: the **Collections pane** → the **"Preview the shared app"** button at the top → the
 page appears, drawn from the working tree. Opening it reads only: nothing is written and no URL
 name is taken.

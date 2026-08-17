@@ -48,6 +48,30 @@ const submit = { orders: { createFields: ["name"] } };
  *
  *  The file input is here deliberately: a browser refuses a non-empty value on one, and the throw
  *  used to take the whole run with it — an app with an upload control reported nothing at all. */
+/** A page that must leave NO record behind, checked for the reason it leaves none.
+ *
+ *  The three that must not write are not variations on one idea, and collapsing them to "nothing
+ *  was written" would lose what each is guarding:
+ *
+ *  - `onload` / `resubmits` submit BEFORE the press. The run clears that confirmation, so the press
+ *    itself raises nothing: `pressSubmitted` false and `withheld` FALSE, because there was no
+ *    submission to withhold. What they did is reported as `submittedOnLoad`, which is also the
+ *    finding a visitor would care about — they are shown a dialog nobody asked for.
+ *  - `timer` submits DURING the press. The press really does see a submission arrive, which is the
+ *    exact shape that made every counting-based design write a record for a button that does
+ *    nothing. It is refused on the only ground that is not a guess: the runtime did not mark it.
+ *
+ *  Its own function because the assertions are the same three lines with different answers, and
+ *  because inlining all four pages put the test over the complexity limit. */
+function expectNoRecord(pages: HeadlessPageReport[], id: string, want: { submittedOnLoad: number; pressSubmitted: boolean; withheld: boolean }): void {
+  const page = pages.find((pg) => pg.id === id);
+  expect(page, id).toBeDefined();
+  expect(page?.submittedOnLoad, id).toBe(want.submittedOnLoad);
+  expect(page?.presses[0]?.submitted !== null, id).toBe(want.pressSubmitted);
+  expect(page?.presses[0]?.writeWithheld, id).toBe(want.withheld);
+  expect(page?.presses[0]?.write, id).toBeNull();
+}
+
 const WORKS = `
 <div id="menu">loading…</div>
 <input id="name">
@@ -320,15 +344,17 @@ describe.skipIf(!chromeReady)("a headless run, in a real browser", () => {
     expect(unreachable?.presses[1]?.submitted).toBeNull();
   });
 
-  it("WRITES NOTHING against a real page, because no runtime marks a submission yet", async () => {
+  it("writes for the pressed button and for NONE of the three pages that submit by themselves", async () => {
     // THE GATE, against four pages that each break a different guess somebody might make about
     // cause: the ordinary one, the one that submits on load, the one that resubmits the moment its
-    // confirmation is answered, and the one whose timer fires later. None of their submissions
-    // carries the runtime's mark (`GESTURE_MARK`), so none is written — and that is the whole of
-    // the rule, with no window and no counting anywhere near it.
+    // confirmation is answered, and the one whose timer fires later. Only the first submits from
+    // inside the click's dispatch, so only the first carries the runtime's mark (`GESTURE_MARK`)
+    // and only the first is written — with no window and no counting anywhere near it.
     //
-    // This is the test that will change when `@receptron/sharedapp` starts marking: the first page
-    // will write, and the other three still must not.
+    // Against a REAL browser and the REAL published runtime: the harness serves
+    // `node_modules/@receptron/sharedapp/dist/view`, so this goes red if a future version stops
+    // marking — which is the failure no unit test in this repo can see, because the mark can only
+    // be produced by a browser dispatching a real click.
     const wrote: string[] = [];
     const run = await runPagesHeadless(
       [page("works", WORKS), page("onload", SUBMITS_ON_LOAD), page("resubmits", RESUBMITS_ON_DECLINE), page("timer", SUBMITS_ON_A_TIMER)],
@@ -341,12 +367,17 @@ describe.skipIf(!chromeReady)("a headless run, in a real browser", () => {
       },
     );
     if (!run.ok) throw new Error(run.problems.join(" "));
-    expect(wrote).toEqual([]);
-    // The submission REACHED the parent on the ordinary page — that half is proven, and it is what
-    // the run is for. What was not established is that the press caused it.
+    // ONE write, and it is the pressed button's — `"preview"` is what the run fills a bare text
+    // input with. Asserting the VALUE rather than the count is the point: a run that wrote
+    // "a timer did this" instead would also have written exactly once.
+    expect(wrote).toEqual(["preview"]);
     expect(run.pages[0]?.presses[0]?.submitted).toEqual({ cid: "orders", fields: ["name"] });
-    expect(run.pages[0]?.presses[0]?.writeWithheld).toBe(true);
-    expect(run.pages[0]?.presses[0]?.write).toBeNull();
+    expect(run.pages[0]?.presses[0]?.writeWithheld).toBe(false);
+    expect(run.pages[0]?.presses[0]?.write).toMatchObject({ cid: "orders", ok: true, cleanup: "removed" });
+    // The other three are unwritten for two DIFFERENT reasons — see `expectNoRecord`.
+    expectNoRecord(run.pages, "onload", { submittedOnLoad: 1, pressSubmitted: false, withheld: false });
+    expectNoRecord(run.pages, "resubmits", { submittedOnLoad: 1, pressSubmitted: false, withheld: false });
+    expectNoRecord(run.pages, "timer", { submittedOnLoad: 0, pressSubmitted: true, withheld: true });
   }, 240_000);
 
   it("writes nothing when it is given no writer, which is every run a test drives", async () => {

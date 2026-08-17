@@ -1,6 +1,6 @@
 # ヘッドレスプレビューを、ペインのプレビューと同じものにする（P6）
 
-**状態**: 実装済み（2026-08-17）。§5 の 1–7 すべて。**書き込みは D-2c の印待ちで休眠中**
+**状態**: 完了（2026-08-17）。§5 の 1–7 すべて。**印は `@receptron/sharedapp` 0.9.0 で入り、書き込みは生きている**
 **日付**: 2026-08-17
 **実装先**: MulmoTerminal のみ（`@receptron/sharedapp` も mulmoserver も変更しない）
 **前提**: [`plans/feat-shared-app-no-staging.md`](./feat-shared-app-no-staging.md) §5b（P6 の決定）、
@@ -130,9 +130,26 @@ MulmoTerminal のペインもヘッドレスも実行している。**ホスト�
 `PendingSubmit` は確認パネルを描くのに要るものしか運ばないので、そこを通さない。
 結果、`@receptron/sharedapp` 側の変更は**ブートストラップ 1 箇所**で済む。
 
-**今日の時点で、公開されているランタイムは印を付けない = 何も書かない。** これは
-バージョン判定ではなく構造で fail-closed になっている。ツールの説明とスキルも
-「今は書かない」と書いてある — 印が付くようになったら、そこも一緒に直す。
+**印は `@receptron/sharedapp` 0.9.0 で入った**（sharedapp #12 → #14 → #15、レビュー 4 巡）。
+着地は「進行中のディスパッチについて DOM が持っている値をその場で読む」という形:
+
+```js
+held !== null && held.isTrusted === true && held.eventPhase !== 0
+```
+
+`held` は capture で掴んだ trusted な **click だけ**。倒れた設計は 4 つあって、どれも
+「時間・順序・閉じる合図」から因果を出そうとしたものだった — bubble で窓を閉じる／タスク
+ソース 3 つに close を積む（rAF はタスクより先に走り、FIFO は同じキューの中でしか効かない）／
+`change` も掴む（`element.click()` は **trusted な** `change` を作れる）／掴んだ Event の
+再ディスパッチ（`isTrusted` が false になるのに `eventPhase` は生きている）。
+
+**代償が 1 つあり、意図的に受け入れている**: `change` ハンドラから保存するコントロール
+（チェックボックス、セレクト）は無印になる。activation behavior はクリックのディスパッチが
+終わった**後**に走るため。`change` を受け入れれば script から偽装できるので、倒れる向きは
+「何も書かない」側に置いた。ツールの説明・スキル・`GESTURE_MARK` の doc に書いてある。
+
+古いランタイムに固定されたアプリでは印が付かない = 何も書かない。バージョン判定ではなく
+構造で fail-closed のまま。
 
 ### D-3. 書き込みには上限を置き、落とした分を言う
 
@@ -184,7 +201,7 @@ MulmoTerminal のペインもヘッドレスも実行している。**ホスト�
 3. `headlessPreview.ts` — `exposeFunction`、press ごとの accept → 判定 → 取り消し、
    スクリーンショット、上限
 4. `headlessReport.ts` — 判定・取り消し・画像パス・落とした受諾を書く。締めくくりを書き換える
-5. `shared-app-tool.ts` — `preview` の説明文を書き換える（**「書き込みは無い」は嘘になる**）
+5. `shared-app-tool.ts` — `preview` の説明文を書き換える（**「書き込みは無い」は嘘になる**）〔0.9.0 で再度更新済み〕
 6. `server/skills/mulmoterminal-shared-app/SKILL.md` — 同じ
 7. テスト — ハーネス無しで報告を確かめるもの（既存のやり方）＋ 注入した書き込み関数が
    呼ばれること・取り消しが呼ばれること
