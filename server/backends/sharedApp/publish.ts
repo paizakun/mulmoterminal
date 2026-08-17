@@ -218,6 +218,15 @@ async function pageGate(
   return { ok: true, view: view === null ? null : view.view };
 }
 
+/** The app document a bookkeeping write may use: this publish's projection, plus the `public` block
+ *  that is live RIGHT NOW.
+ *
+ *  Publish holds its own `public` back for the last write of the run, so a document written before
+ *  then carries none — and every one of those writes REPLACES. Carrying the live block through is
+ *  what keeps an already-open app open while it is being re-published. */
+const stillOpen = (appDoc: Record<string, unknown>, existing: Record<string, unknown> | null): Record<string, unknown> =>
+  existing?.public === undefined ? appDoc : { ...appDoc, public: existing.public };
+
 /** What this publish is writing, and the app document it is writing it onto — established when it
  *  was not there.
  *
@@ -318,7 +327,21 @@ export async function publishSharedApp(root: string, opts: SharedAppOptions = {}
   // after it: recording a new reservation writes the app document, and the app document written
   // last by a publish is the one carrying the `public` block. Reserving afterwards would write a
   // copy without it and silently close the app it had just opened.
-  const reserved = await reserveHeldSlug({ handle, aid, root, wanted: authored.slug, held, appDoc, publicOpen: face.public !== undefined });
+  //
+  // The reservation write is a REPLACEMENT of the app document, and `appDoc` deliberately carries
+  // no `public` — publish holds that back for its last write. So the LIVE block is carried through
+  // here explicitly: without it, renaming an open app closes it for the length of the run, and a
+  // failure anywhere in between leaves it dark rather than open on a mixed version, which is the
+  // opposite of the trade this ordering exists to make.
+  const reserved = await reserveHeldSlug({
+    handle,
+    aid,
+    root,
+    wanted: authored.slug,
+    held,
+    appDoc: stillOpen(appDoc, existingApp),
+    publicOpen: face.public !== undefined,
+  });
   if (reserved !== undefined && !reserved.ok) return { ...reserved, partial: reserved.partial || established };
   const slug = reserved?.slug ?? held;
   const withSlug = slug === undefined ? face.app : { ...face.app, slug };

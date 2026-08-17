@@ -178,3 +178,29 @@ describe("the roster and the field it is compared by", () => {
     expect(problems[0]).toContain("stampField names 'createdAt'");
   });
 });
+
+describe("the fields a RULE reads off another record", () => {
+  // `scopedFieldProblems` answers with the publisher's `schemaRefProblems` as well as its own
+  // checks: `idIn.where.field` and the two window bounds are read by the rules off a DIFFERENT
+  // collection's records, and only a schema can say whether the name exists. This pins the wiring
+  // — the half that reaches `publishGate` through this one function.
+  it("refuses a window bound the target collection does not declare", () => {
+    const declared = app({
+      public: {
+        enabled: true,
+        submit: {
+          bookings: {
+            auth: "verifiedEmail",
+            createFields: ["classId"],
+            window: { fromField: { ref: "classId", collection: "classes", field: "nosuchfield" } },
+          },
+        },
+      },
+    });
+    const problems = scopedFieldProblems(declared, [
+      { cid: "bookings", schema: bookings },
+      { cid: "classes", schema: classes },
+    ]);
+    expect(problems.join("\n")).toContain("window.fromField.field names 'nosuchfield'");
+  });
+});

@@ -13,16 +13,7 @@ import { APPS_COLLECTION } from "@receptron/sharedapp";
 import type { SharedAppFailure, SharedAppHandle } from "./context.js";
 import { reserveSlug, retireSlug, type SlugResult } from "./slug.js";
 
-/** Reserve the declared URL name if this app does not already hold it, and record the result on
- *  the app document so the next operation does not reserve a SECOND one.
- *
- *  Undefined when the declaration names no slug — reserving a name nobody asked for would take it
- *  from someone who did. The reservation is IRREVERSIBLE (`appSlugs` has `allow delete: if false`),
- *  which is why it follows a name the author wrote rather than one this code invents.
- *
- *  The extra app-document write is the price of the ordering: the reservation cannot be made
- *  before `apps/{aid}` exists, and what was reserved cannot be recorded before it is reserved. It
- *  happens only on the run that actually takes a name. */
+/** What a reservation needs to know. */
 export interface SlugRequest {
   handle: SharedAppHandle;
   aid: string;
@@ -37,6 +28,16 @@ export interface SlugRequest {
   publicOpen: boolean;
 }
 
+/** Reserve the declared URL name if this app does not already hold it, and record the result on
+ *  the app document so the next operation does not reserve a SECOND one.
+ *
+ *  Undefined when the declaration names no slug — reserving a name nobody asked for would take it
+ *  from someone who did. The reservation is IRREVERSIBLE (`appSlugs` has `allow delete: if false`),
+ *  which is why it follows a name the author wrote rather than one this code invents.
+ *
+ *  The extra app-document write is the price of the ordering: the reservation cannot be made
+ *  before `apps/{aid}` exists, and what was reserved cannot be recorded before it is reserved. It
+ *  happens only on the run that actually takes a name. */
 export async function reserveHeldSlug({ handle, aid, root, wanted, held, appDoc, publicOpen }: SlugRequest): Promise<SlugResult | undefined> {
   if (wanted === undefined) return undefined;
   // A reclaim must not change whether the name resolves: an app that is not published holds a name

@@ -203,47 +203,6 @@ export function tierWrites(handle: SharedAppHandle, aid: string, plan: TierPlan,
   ];
 }
 
-/** One deletion, named as the operator would name it. */
-export const tierDelete = (handle: SharedAppHandle, aid: string, tier: "member" | "roster", docId: string): WriteStep => ({
-  what: `the withdrawal of ${appViewTierPath(aid, tier)}/${docId}`,
-  run: async (): Promise<void> => {
-    await handle.docs.delete(appViewTierPath(aid, tier), docId);
-  },
-});
-
-/** Everything PUBLISHED in either tier, for a take-down.
- *
- *  Listed rather than derived from `views[]`, because unpublish deliberately
- *  does not read the declaration: it has to work when the declaration is
- *  broken, which is one of the times an operator most wants it. `staged:` is
- *  not returned — closing the doors is not undoing a deploy.
- *
- *  A tier that cannot be listed is not fatal on its own, but it is not silent
- *  either: pages left behind stay readable by everyone the tier ever admitted,
- *  which is exactly what a take-down is for. */
-export async function liveTierDocs(
-  handle: SharedAppHandle,
-  aid: string,
-): Promise<{ ok: true; tiers: { tier: "member" | "roster"; ids: string[] }[] } | SharedAppFailure> {
-  const tiers: { tier: "member" | "roster"; ids: string[] }[] = [];
-  for (const tier of ["member", "roster"] as const) {
-    try {
-      const existing = await handle.docs.list(appViewTierPath(aid, tier));
-      tiers.push({ tier, ids: existing.map((doc) => doc.id).filter((id) => id.startsWith("live:")) });
-    } catch (err) {
-      return {
-        ok: false,
-        partial: false,
-        problems: [
-          `unpublish failed while reading the published pages at apps/${aid}/${tier}: ${err instanceof Error ? err.message : String(err)}`,
-          "Nothing was written. Those pages are readable by everybody that tier admits, so taking the app down without removing them would leave the app's own staff page live on a closed app.",
-        ],
-      };
-    }
-  }
-  return { ok: true, tiers };
-}
-
 /** One tier, planned: what to write and what to take away. */
 export interface PlannedTier {
   plan: TierPlan;

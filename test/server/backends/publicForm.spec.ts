@@ -5,7 +5,8 @@
 // the form, and this is the projection that makes it so.
 import { describe, it, expect } from "vitest";
 import { parseAuthoredApp } from "@receptron/sharedapp";
-import { oversizeProblem, publicFormOf, publicInputProblems, schemasOfCollections } from "../../../server/backends/sharedApp/publicForm.js";
+import { oversizeProblem, publicFormOf, publicInputProblems } from "../../../server/backends/sharedApp/publicForm.js";
+import { schemasOf } from "../../../server/backends/sharedApp/context.js";
 
 const schema = {
   title: "Responses",
@@ -208,7 +209,7 @@ describe("publicInputProblems", () => {
   // The gate that runs before any write — `declarationProblems`, shared by deploy, publish and
   // check — so the author is told while it is still a declaration.
   const collection = (fields: Record<string, unknown>) =>
-    schemasOfCollections([{ slug: "responses", schema: { ...schema, fields: { ...schema.fields, ...fields } } } as never]);
+    schemasOf([{ slug: "responses", schema: { ...schema, fields: { ...schema.fields, ...fields } } } as never]);
 
   it("says nothing about a form of plain fields", () => {
     expect(publicInputProblems(authored(surveySubmit), collection({}))).toEqual([]);

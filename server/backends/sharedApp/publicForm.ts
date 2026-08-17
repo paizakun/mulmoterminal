@@ -16,7 +16,6 @@
 // benefit.
 import { COMPUTED_TYPES, type CollectionFieldType, type CollectionSchema } from "@mulmoclaude/core/collection";
 import type { AuthoredApp } from "@receptron/sharedapp";
-import type { LoadedCollection } from "@mulmoclaude/core/collection/server";
 
 /** The field types a STRANGER may be asked to fill in.
  *
@@ -141,11 +140,6 @@ export function publicInputProblems(app: AuthoredApp, schemas: readonly { cid: s
     if (schema === undefined) return [];
     return spec.createFields.flatMap((name) => problemWith(cid, name, schema));
   });
-}
-
-/** The schemas as this check reads them — a `LoadedCollection` keys its schema by `slug`. */
-export function schemasOfCollections(collections: readonly LoadedCollection[]): { cid: string; schema: CollectionSchema }[] {
-  return collections.map((collection) => ({ cid: collection.slug, schema: collection.schema }));
 }
 
 function problemWith(cid: string, name: string, schema: CollectionSchema): string[] {

@@ -483,6 +483,44 @@ describe("shared app publish / unpublish", () => {
     expect(docs.app()?.slug).toBe("sakura-salon");
   });
 
+  it("keeps a renamed app OPEN while it is being published", async () => {
+    // The reservation write REPLACES the app document, and the document publish projects carries
+    // no `public` — it is held back for the last write. So a rename that wrote the projection
+    // alone would close the app at the START of the run: a failure anywhere after that leaves it
+    // dark, which is the opposite of the trade this ordering makes (open on a mixed version).
+    writeApp(root, declaration({ slug: "sakura-hair", public: { enabled: true, read: ["bookings"] } }));
+    await publishSharedApp(root, stamp);
+    expect(docs.app()?.public).toMatchObject({ enabled: true });
+
+    writeApp(root, declaration({ slug: "sakura-salon", public: { enabled: true, read: ["bookings"] } }));
+    // The run dies after the reservation, on the first document it would write.
+    docs.failAt = `apps/${AID}/collections/bookings`;
+    const result = await publishSharedApp(root, stamp);
+    expect(result.ok).toBe(false);
+    // Still open, on the version that was live before this run.
+    expect(docs.app()?.public).toMatchObject({ enabled: true });
+    // And the name it took is recorded, so the next run reclaims it rather than numbering.
+    expect(docs.app()?.slug).toBe("sakura-salon");
+  });
+
+  it("writes the whole app document when the publish created it", async () => {
+    // `publishSteps` SKIPS the app-document write when this run established it, because `claimApp`
+    // (and the reservation after it) wrote exactly the same projection. That is only true while
+    // the two agree — this pins the result rather than the reasoning.
+    writeApp(root, declaration({ slug: "sakura-hair", public: { enabled: true, read: ["bookings"] } }));
+    const result = await publishSharedApp(root, stamp);
+    expect(result.ok === false ? result.problems : []).toEqual([]);
+    expect(docs.app()).toMatchObject({
+      aid: AID,
+      name: "App Under Test",
+      owner: OWNER.uid,
+      slug: "sakura-hair",
+      memberEmails: [OWNER.email],
+      publishedBy: OWNER.email,
+      public: { enabled: true, read: ["bookings"] },
+    });
+  });
+
   // --- the app's own pages, per audience -------------------------------------
 
   /** A declaration with a page for the front desk and one for a participant.
@@ -575,6 +613,10 @@ describe("shared app publish / unpublish", () => {
     withPages();
     await publishSharedApp(root, stamp);
     const wrote = docs.writes.filter((line) => line.includes(`apps/${AID}/member/live:`));
+    // Both present FIRST: two missing writes are both -1, and -1 < -1 is false, but one missing
+    // write reads as an order that holds.
+    expect(wrote).toContain(`set apps/${AID}/member/live:desk`);
+    expect(wrote).toContain(`set apps/${AID}/member/live:config`);
     expect(wrote.indexOf(`set apps/${AID}/member/live:desk`)).toBeLessThan(wrote.indexOf(`set apps/${AID}/member/live:config`));
   });
 
@@ -586,20 +628,28 @@ describe("shared app publish / unpublish", () => {
     docs.writes.length = 0;
     await publishSharedApp(root, stamp);
     const removed = docs.writes.filter((line) => line.startsWith(`delete apps/${AID}/member/live:`));
+    expect(removed).toContain(`delete apps/${AID}/member/live:desk`);
+    expect(removed).toContain(`delete apps/${AID}/member/live:config`);
     expect(removed.indexOf(`delete apps/${AID}/member/live:desk`)).toBeLessThan(removed.indexOf(`delete apps/${AID}/member/live:config`));
   });
 
-  it("takes the published pages down on unpublish", async () => {
+  it("leaves the roster's pages standing on unpublish", async () => {
+    // These used to come down here, when `live:` meant "published" and the roster went on working
+    // from a `staged:` copy at `/staging/{aid}`. There is no such copy any more: these documents
+    // ARE the roster's app, read at `/m/{slug}` and `/p/{slug}` and gated by `staffOf` / `listedIn`
+    // — never by anything unpublish touches. Deleting them would take the front desk's page away
+    // from the front desk because the owner closed the app to strangers.
     withPages({ public: { enabled: true, read: ["bookings"] } });
     await publishSharedApp(root, stamp);
     expect(docs.doc(`apps/${AID}/member`, "live:desk")).toBeDefined();
 
     const closed = await unpublishSharedApp(root);
     expect(closed.ok === false ? closed.problems : []).toEqual([]);
-    // Closed: the staff page is readable by everyone that tier admits whatever else is shut, so
-    // leaving it would be a live page on a taken-down app.
-    expect(docs.doc(`apps/${AID}/member`, "live:desk")).toBeUndefined();
-    expect(docs.doc(`apps/${AID}/roster`, "live:mine")).toBeUndefined();
+    expect(docs.doc(`apps/${AID}/member`, "live:desk")).toBeDefined();
+    expect(docs.doc(`apps/${AID}/roster`, "live:mine")).toBeDefined();
+    // What DOES come down is the public half, and only that.
+    expect(docs.app()).not.toHaveProperty("public");
+    expect(docs.doc(`apps/${AID}/config`, "public")).toBeUndefined();
   });
 
   it("refuses a page that cannot be read, before anything is written", async () => {

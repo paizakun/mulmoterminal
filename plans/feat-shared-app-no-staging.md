@@ -1,6 +1,7 @@
 # staging を廃止し、「作った時点で在る」「publish で見える」の 2 状態にする
 
-**状態**: 設計（実装未着手）。要件は 2026-08-16 に確定
+**状態**: 実装済み（2026-08-16〜17）。sharedapp 0.8.0 公開済み・mulmoserver は receptron/mulmoserver#190、
+MulmoTerminal は #1760。P6（ヘッドレスのパリティ）だけが未着手
 **日付**: 2026-08-16
 **実装先**: `@receptron/sharedapp`（npm）・`../mulmoserver`（ルール／ルート／ビュー）・MulmoTerminal（ツール／スキル）
 **前提**: [`docs/shared-app-principles.md`](../docs/shared-app-principles.md)（原則 8・9 を書き換える）、

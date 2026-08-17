@@ -15,7 +15,7 @@ import { APPS_COLLECTION, parseAuthoredApp, publishProblems, type AuthoredApp } 
 import type { PublishStamp } from "@receptron/sharedapp";
 import type { CollectionSchema } from "@mulmoclaude/core/collection";
 import { isRecord } from "../../../common/isRecord.js";
-import { publicInputProblems, schemasOfCollections } from "./publicForm.js";
+import { publicInputProblems } from "./publicForm.js";
 import { scopedFieldProblems } from "./scopedFields.js";
 
 const execFileAsync = promisify(execFile);
@@ -127,8 +127,9 @@ export function declarationProblems(app: AuthoredApp, collections: readonly Load
     // app-wide owner, so it would report a missing owner for every sound declaration.
     handle?.email ?? ownerFromRoster(app) ?? "",
   );
-  problems.push(...publicInputProblems(app, schemasOfCollections(collections)));
-  problems.push(...scopedFieldProblems(app, schemasOfCollections(collections)));
+  const schemas = schemasOf(collections);
+  problems.push(...publicInputProblems(app, schemas));
+  problems.push(...scopedFieldProblems(app, schemas));
   problems.push(...rosterCaseProblems(app, handle?.email));
   if (handle !== null && app.owner !== undefined && app.owner !== handle.uid) {
     // Not fatal on its own — the rules pin `owner` to the EXISTING document on update — but a
