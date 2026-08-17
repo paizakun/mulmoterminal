@@ -607,8 +607,14 @@ function createConfigReader({ defaultCwd, snapshotVersion, adoptServerPresets, m
  * for the seconds the backend takes to come back (`scripts/dev-server.mjs` restarts it on every
  * save under `server/`).
  *
- * Module-level, like `createPresetManager` — it owns state (which chain is current, whether the
- * scope is gone) that has no business being read from anywhere else.
+ * ONE LOADER PER `useAppConfig()` CALL, like the preset manager beside it: the chain state (which
+ * generation is current, whether the scope is gone) belongs to the caller that loads, and `stale()`
+ * therefore compares against that caller's own generation only. Two live callers do not supersede
+ * each other — which is safe for the reason the caution above `useAppConfig` gives: the shell that
+ * mounts is the one that loads, and everything else takes the values from it. Give a second caller
+ * a `loadConfig` and that stops being true, and a slow attempt of one could adopt over a newer
+ * answer of the other, since the module-level singletons have no version guard of their own.
+ * (CodeRabbit on #1771 read the old wording here as claiming module-level state.)
  */
 function createConfigLoader(loadOnce: ConfigRead): () => Promise<void> {
   // Which chain is the current one. A second `load()` — a remount, an HMR update — supersedes the
