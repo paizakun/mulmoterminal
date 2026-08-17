@@ -211,7 +211,7 @@ async function publishGate(
 
 /** The two questions that are asked of the PAGE and of the live records before
  *  anything is written — both of them things a run cannot take back once the
- *  schemas have been promoted.
+ *  schemas have gone out.
  *
  *  Together because they share that timing, not because they are alike: one
  *  reads a file off disk, the other reads what the app already holds. */

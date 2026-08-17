@@ -2,8 +2,8 @@
 //
 // `app.json` is a small file, and every one of its failures found in testing came from the same
 // place: the agent had to write it from memory, before anything could check it. It guessed the
-// owner's address (the tool knows it), it wrote a `public` block that deploy refused for three
-// separate reasons, and when a deploy failed it edited the file by hand — deleting the `aid` and
+// owner's address (the tool knows it), it wrote a `public` block that publish refused for three
+// separate reasons, and when a publish failed it edited the file by hand — deleting the `aid` and
 // creating a second, orphaned app.
 //
 // So the things a person actually asks for become operations: start an app, take over a clone of
@@ -47,7 +47,7 @@ export type DeclareResult = DeclareSuccess | SharedAppFailure;
  *
  *  The address is the whole reason this is an operation rather than a paragraph of instructions.
  *  It has to match what the rules see (`request.auth.token.email`), the agent cannot read it, and
- *  asking the user invites the one answer that fails at deploy — the address they think they are
+ *  asking the user invites the one answer that fails at publish — the address they think they are
  *  using. */
 export async function initSharedApp(root: string, name: string | undefined, slug: string | undefined): Promise<DeclareResult> {
   // The file first, because "you already have one" is the more useful answer and it does not
@@ -71,7 +71,7 @@ export async function initSharedApp(root: string, name: string | undefined, slug
       partial: false,
       problems: [
         "starting an app needs a signed-in session: connect remote-host first.",
-        "The declaration names its owner by EMAIL, and it has to be the address this machine is signed in with — guessing it produces an app nobody can deploy.",
+        "The declaration names its owner by EMAIL, and it has to be the address this machine is signed in with — guessing it produces an app nobody can publish.",
       ],
     };
   }
@@ -84,14 +84,14 @@ export async function initSharedApp(root: string, name: string | undefined, slug
   // `apps/{aid}` is a shelf every user of the deployment shares, and its `allow create` asks only
   // that you name yourself owner. The aid used to be minted into `app.json` — a file meant to be
   // committed and read in a pull request — while the document stayed absent until the first
-  // deploy. Anyone who read the file in that window could create the document as themselves, and
+  // publish. Anyone who read the file in that window could create the document as themselves, and
   // then it is theirs: the real owner's write becomes an update they are not allowed to make, and
   // nothing can free the id, because a client may never delete an app document. A UUID stops the
   // aid being GUESSED; it was never going to stop it being read.
   //
   // The reservation carries the roster and nothing else — no `public`, no `collections` — so it
-  // grants exactly one thing: this address is the owner. Deploy's `set` then lands as an update by
-  // the same owner, which is what it always was for an app deployed twice.
+  // grants exactly one thing: this address is the owner. Publish's `set` then lands as an update by
+  // the same owner, which is what it always was for an app published twice.
   const reserved = await reserveApp(handle, aid, reservation, "init");
   if (reserved) return reserved;
 
@@ -223,7 +223,7 @@ export async function forkSharedApp(root: string, name: string | undefined, slug
       partial: false,
       problems: [
         "forking an app needs a signed-in session: connect remote-host first.",
-        "The new declaration names its owner by EMAIL, and it has to be the address this machine is signed in with — guessing it produces an app nobody can deploy.",
+        "The new declaration names its owner by EMAIL, and it has to be the address this machine is signed in with — guessing it produces an app nobody can publish.",
       ],
     };
   }
@@ -389,7 +389,7 @@ export interface CheckReport {
   /** The address the declaration names as app-wide owner, when it names one. */
   declaredOwner: string | undefined;
   problems: string[];
-  /** What the pages it names will probably get wrong, without stopping a deploy. See
+  /** What the pages it names will probably get wrong, without stopping a publish. See
    *  `viewWarnings`. */
   warnings: string[];
 }
@@ -398,7 +398,7 @@ export interface CheckReport {
  *  anything or touching the app.
  *
  *  The gate that used to run only at deploy. An agent that has just written a declaration cannot
- *  otherwise find out whether it is deployable — and in testing it did not: the invalid `public`
+ *  otherwise find out whether it is publishable — and in testing it did not: the invalid `public`
  *  block travelled all the way to a live refusal, and by then the agent was editing files to
  *  recover. */
 export async function checkSharedApp(root: string): Promise<CheckReport | SharedAppFailure> {
@@ -409,13 +409,13 @@ export async function checkSharedApp(root: string): Promise<CheckReport | Shared
 
   const collections = await sharedCollections(root);
   const handle = firestoreHandle();
-  // The SAME gate a deploy runs, not a second opinion. `check` exists to answer "would a deploy be
+  // The SAME gate a publish runs, not a second opinion. `check` exists to answer "would a publish be
   // refused?", and a separate implementation of that question answers it differently — this one
-  // used to miss the `owner` uid mismatch and call a declaration deployable that deploy then
+  // used to miss the `owner` uid mismatch and call a declaration publishable that publish then
   // refused.
   const problems = declarationProblems(parsed.app, collections, handle);
   // The PAGES too, read from disk. A `path` naming nothing, a page too large, a page written
-  // against the host's bridge: each of those refuses a deploy, and answering "deployable" without
+  // against the host's bridge: each of those refuses a publish, and answering "publishable" without
   // having opened them is the answer this action exists not to give.
   const pages = await viewFilesReport(root, parsed.app);
   return {
@@ -450,7 +450,7 @@ export interface InviteSuccess {
  *  would be a worse version of editing it by hand. `role: null` removes. */
 export async function inviteToSharedApp(root: string, rawEmail: string, role: AppRoleName | null, cid: string): Promise<InviteSuccess | SharedAppFailure> {
   // `assignee` is not an app-wide role, and it is refused HERE rather than left
-  // to the deploy for the same reason every other refusal in this file is: the
+  // to the publish for the same reason every other refusal in this file is: the
   // write would otherwise succeed, the tool would report the invitation as done,
   // and the author would open `app.json`, find exactly what they asked for, and
   // have nothing to work back from. Which rows are yours is a per-collection
@@ -467,10 +467,10 @@ export async function inviteToSharedApp(root: string, rawEmail: string, role: Ap
   }
   // Lower-cased, because the roster key is compared to `request.auth.token.email` by a rule that
   // has no `lower()`. Firebase hands the token a lower-cased address, so an entry typed
-  // `Foo@Example.com` matches nobody — and once deployed the failure is silent in the worst way:
+  // `Foo@Example.com` matches nobody — and once published the failure is silent in the worst way:
   // the roster reads correctly to a human, and the person invited is refused everything with no
   // error naming them. Written correctly here; a hand-edited one is stopped by
-  // `rosterCaseProblems` before a deploy can carry it.
+  // `rosterCaseProblems` before a publish can carry it.
   const email = rawEmail.toLowerCase();
   let written = email;
   let ambiguous: string[] = [];
@@ -492,7 +492,7 @@ export async function inviteToSharedApp(root: string, rawEmail: string, role: Ap
     written = matches[0] ?? email;
     const next = nextMembers(manifest, written, role, cid);
     if (next === null) return null;
-    // An app with no app-wide owner has no publisher: every deploy is refused, INCLUDING the one
+    // An app with no app-wide owner has no publisher: every publish is refused, INCLUDING the one
     // that would put an owner back. The file can still be edited by hand, but this tool must not
     // be the way somebody locks themselves out — removing or demoting an owner is fine once
     // another one exists.
@@ -519,7 +519,7 @@ export async function inviteToSharedApp(root: string, rawEmail: string, role: Ap
       partial: false,
       problems: [
         `that would leave the app with no owner: ${written} is the only address holding \`"*": "owner"\`.`,
-        "An app with no owner cannot be deployed at all — not even to put an owner back. Add another owner first, then remove this one.",
+        "An app with no owner cannot be published at all — not even to put an owner back. Add another owner first, then remove this one.",
       ],
     };
   }
@@ -538,7 +538,7 @@ export async function inviteToSharedApp(root: string, rawEmail: string, role: Ap
  *  file belongs to the author and this tool only ever changes the key it is asked about, and an
  *  upper-case key can be CORRECT — it is what the rules compare against when the provider hands
  *  over that address, which is exactly the case `rosterCaseProblems` exempts. Silently lower-casing
- *  it while changing somebody's role would revoke everything that person has. The deploy-time check
+ *  it while changing somebody's role would revoke everything that person has. The publish-time check
  *  is where a wrong spelling is reported, and a hand edit is how it gets fixed. */
 /** The keys as they will be shown back to the author: quoted, in the order the file has them. */
 function quoted(keys: readonly string[]): string {
@@ -554,7 +554,7 @@ function rosterMatches(manifest: Record<string, unknown>, email: string): string
  *
  *  Built by filtering rather than by deleting keys: the roster is the permission list, and an
  *  entry that half-survives a removal is the failure mode the rules cannot save us from —
- *  `membersConsistent()` would reject the deploy, which is the good case, but only after the
+ *  `membersConsistent()` would reject the publish, which is the good case, but only after the
  *  operator believed somebody had been removed. */
 function nextMembers(manifest: Record<string, unknown>, email: string, role: AppRoleName | null, cid: string): Record<string, unknown> | null {
   const members = isRecord(manifest.members) ? manifest.members : {};

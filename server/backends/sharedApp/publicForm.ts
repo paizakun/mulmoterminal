@@ -81,9 +81,9 @@ export type PublicForm = Record<string, PublicCollectionForm>;
 
 /** The form spec for every collection the declaration opens for public submission.
  *
- *  Read from the STAGED schemas — the version publish is promoting — for the same reason the
- *  promotion itself is: what ships is what the roster reviewed, not what the working tree says
- *  now. */
+ *  Read from the schemas publish is about to write — the same objects the gates were given —
+ *  rather than re-read off disk here. One run, one version: a form drawn from a second read could
+ *  describe fields the schemas beside it do not have. */
 export function publicFormOf(authored: AuthoredApp, schemas: readonly { cid: string; schema: CollectionSchema }[]): PublicForm {
   const submit = authored.public?.submit ?? {};
   const byCid = new Map(schemas.map((entry) => [entry.cid, entry.schema]));
@@ -203,8 +203,8 @@ function fieldsOf(
 /** How much of the world-readable config document the projection may take up.
  *
  *  Firestore refuses a document over 1 MiB, and `config/public` carries core's settings projection
- *  as well as this form. A refusal from the database arrives mid-publish — after schemas have
- *  already been promoted — and says only that a document was too large; this says which app is too
+ *  as well as this form. A refusal from the database arrives mid-publish — after the schemas have
+ *  already gone out — and says only that a document was too large; this says which app is too
  *  big to draw and stops before the first write. The margin is for the settings beside it. */
 const PUBLIC_CONFIG_BUDGET = 700_000;
 

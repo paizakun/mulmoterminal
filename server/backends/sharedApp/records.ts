@@ -60,8 +60,11 @@ export async function scanRecords(collections: readonly LoadedCollection[], work
 
 /** The scan as a refusal, or null when the operation may proceed.
  *
- *  `what` names the boundary in both messages, because the two differ in what confirming COSTS:
- *  a confirmed deploy is visible to the roster, a confirmed publish to everyone. */
+ *  Every message names publish, and does so literally rather than through a
+ *  boundary argument. It used to take one, because there were two boundaries
+ *  and they differed in what confirming COST: a confirmed deploy was visible
+ *  to the roster, a confirmed publish to everyone. There is one boundary now,
+ *  so there is one cost to state — everyone. */
 export function recordRefusal(scan: RecordScan, confirm: boolean | undefined): string[] | null {
   if (scan.unreadable.length > 0) {
     return [

@@ -5,11 +5,11 @@
 // projection behind it, which is a tidiness problem; the other order would leave it open with the
 // projection gone, which is the failure this ordering exists to make impossible.
 //
-// The promoted schemas under `collections/{cid}` are deliberately LEFT: nobody can read them
-// while the app is closed, so they cost nothing, and re-publishing is then a promotion rather
-// than a rebuild.
+// The schemas under `collections/{cid}` are deliberately LEFT: nobody can read them while the
+// app is closed, so they cost nothing, and publishing again then rewrites them in place rather
+// than rebuilding the collection from nothing.
 //
-// It deliberately does NOT run the declaration gate that deploy and publish share, and it does
+// It deliberately does NOT run the declaration gate that `check` and publish share, and it does
 // not mint an `aid` the way they do. Those steps decide whether something may go OUT; taking it
 // down has to work when the declaration is broken, which is one of the times an operator most
 // wants it. And a take-down must not AUTHOR: minting an aid here would write a fresh id into

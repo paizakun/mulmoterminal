@@ -4,7 +4,7 @@
 // else built for this problem stops short of the same line: `viewDefects.ts` READS a page and
 // catches the two failures we have already met, and the Collections pane RUNS one but needs a
 // person in front of it. What shipped broken (a lunch sign-up, published twice with a dead Submit
-// button, 2026-08-14) was written, checked, deployed and published without the document ever being
+// button, 2026-08-14) was written, checked and published without the document ever being
 // loaded once. This is the door that closes that: `manageSharedApp` with `action: "preview"`.
 //
 // WHAT IT PROVES, AND WHAT IT DOES NOT. It proves the document loads, the handshake completes, the

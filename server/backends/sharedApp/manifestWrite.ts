@@ -35,7 +35,7 @@ export type ManifestUpdate = { ok: true; manifest: Record<string, unknown>; writ
 
 /** The key two callers must AGREE on to be serialized against each other: one file, one key.
  *
- *  Exported because a whole shared-app OPERATION serializes on the same repository — one deploy
+ *  Exported because a whole shared-app OPERATION serializes on the same repository — one publish
  *  landing inside a publish is the same class of interleaving as two writes to `app.json`, and
  *  keying them differently would leave each holding a lock the other does not.
  *

@@ -343,12 +343,12 @@ function contentProblems(html: string, bytes: number, declared: string, where: s
   return null;
 }
 
-/** Every page the declaration names, read the way deploy will read it — for `check`, which writes
+/** Every page the declaration names, read the way publish will read it — for `check`, which writes
  *  nothing and needs no connection.
  *
- *  `check` answers "would a deploy be refused?", and until this existed it answered that from the
+ *  `check` answers "would a publish be refused?", and until this existed it answered that from the
  *  declaration alone: a `path` naming a file that is not there, a page over the document limit, or
- *  a page written against the host's bridge all passed `check` and were refused by the deploy
+ *  a page written against the host's bridge all passed `check` and were refused by the publish
  *  afterwards — which is exactly the point in the flow this action exists to move earlier. The
  *  warnings come with it for the same reason: they are what the author still has time to act on.
  *

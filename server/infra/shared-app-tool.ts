@@ -10,7 +10,7 @@
 // There is exactly ONE write path to a shared app, and this is it. Core's whole-app `publishApp`
 // was deleted rather than left unused (mulmoclaude #2871) because MulmoTerminal declares the
 // shared-collections capability and binds the Firestore accessor — an action left in core would
-// simply work here, and it wrote `public` without ever passing through staging.
+// simply work here, and it wrote `public` without ever passing through the gates in this file.
 import type { ToolDefinition } from "gui-chat-protocol";
 import { headlessPreview } from "../backends/sharedApp/headlessPreview.js";
 import { narrateHeadlessRun } from "../backends/sharedApp/headlessReport.js";
@@ -172,7 +172,7 @@ async function narrateUnpublish(root: string): Promise<string> {
   if (!result.ok) return result.problems.join("\n");
   return result.wasOpen
     ? `Unpublished apps/${result.aid}: the public block is gone, so anonymous access is closed${noLonger(result.slug)}, and the public config document was deleted. ` +
-        "The promoted schemas were left in place, so publishing again is a promotion."
+        "The schemas under collections/ were left in place, so publishing again rewrites them where they stand."
     : `apps/${result.aid} was already closed to the public — nothing was open to take down. The public config document was deleted if it was still there.`;
 }
 

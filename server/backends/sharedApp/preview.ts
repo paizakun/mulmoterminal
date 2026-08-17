@@ -69,7 +69,7 @@ interface RequestedCollection {
 /** One collection's records, read with the author's own credentials.
  *
  *  A refusal is carried back rather than thrown. The most common one is the ordinary state of an
- *  app that has never been deployed — `apps/{aid}` does not exist, so the rules cannot resolve an
+ *  app that has never been published — `apps/{aid}` does not exist, so the rules cannot resolve an
  *  owner for anything beneath it — and refusing to preview at all because there are no records yet
  *  would make the feature useless exactly when it is most wanted.
  *

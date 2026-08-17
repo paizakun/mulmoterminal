@@ -1,7 +1,7 @@
 // One at a time, per thing.
 //
 // Two chains are kept with this: `app.json` writes (so a read-modify-write cannot lose the other
-// half) and whole shared-app OPERATIONS (so a deploy cannot land in the middle of a publish).
+// half) and whole shared-app OPERATIONS (so one operation cannot land in the middle of another).
 // They are the same mechanism because they are the same problem — a sequence of reads and writes
 // that is only correct if nothing interleaves with it — and having one implementation is what
 // keeps a second one from being written with the subtle parts left out.
@@ -23,7 +23,7 @@ export function serializeBy<T>(key: string, run: () => Promise<T>): Promise<T> {
   const next = previous.catch(() => {}).then(run);
   chains.set(key, next);
   // Dropped when the last waiter settles, so the map does not grow with every project ever
-  // deployed.
+  // published.
   void next
     .catch(() => {})
     .finally(() => {
