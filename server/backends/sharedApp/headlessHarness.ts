@@ -38,6 +38,25 @@
 /** Where the runtime's modules are mounted, relative to the harness page. */
 export const VIEW_MOUNT = "/view";
 
+/** The field on a submit message that says the page made it while handling a real click.
+ *
+ *  Set by the injected bootstrap in `@receptron/sharedapp`, which is the only code in the same
+ *  realm as the event. The contract it has to satisfy, and which nothing here can check:
+ *
+ *    true  — `submit()` was called during the dispatch of a TRUSTED click in this document, or in
+ *            a microtask of that dispatch. A separate task (a `setTimeout`, a promise settled in an
+ *            earlier turn) is NOT that dispatch and must not be marked.
+ *    absent or false — everything else.
+ *
+ *  It is deliberately a fact about the event loop rather than about elapsed time: a slow handler is
+ *  still the handler, and a fast timer is still a timer. That is the whole reason it lives there
+ *  and not here — four attempts to decide it from this side by counting and by waiting were each
+ *  defeated by a page that simply waited longer (`plans/feat-headless-preview-parity.md`, D-2c).
+ *
+ *  Until the published runtime sets it, every submission reads as unmarked and this run writes
+ *  nothing. Fail-closed by construction rather than by a version check that could be got wrong. */
+export const GESTURE_MARK = "gesture";
+
 /** What one rendered document produced, as the browser side collects it. Mirrored on the Node side
  *  by `HeadlessObservation` — the two are one shape crossing `page.evaluate`, so a field added
  *  here has to be read there or it is collected for nobody. */
@@ -91,6 +110,12 @@ let nonce = viewNonce();
 let outbound = [];
 let submitted = [];
 let notices = [];
+// requestId -> did the runtime mark this submission as click-caused. Read off the RAW inbound
+// message: the parent's \`PendingSubmit\` carries what a confirmation panel needs in order to draw,
+// and this is not that — it is provenance, and it travels beside the request rather than inside it.
+// Reading it here is what keeps the change to \`@receptron/sharedapp\` down to the one place that
+// can know the answer: the bootstrap inside the document.
+let gestures = new Map();
 // The verdict Node handed in for the confirmation currently being answered. Null means nothing was
 // accepted, which is what \`submit\` refuses on.
 let answer = null;
@@ -120,7 +145,15 @@ const recording = (make) => () => {
       outbound.push(message);
       channel.post(message);
     },
-    onMessage: channel.onMessage,
+    // INBOUND IS READ TOO, and only for provenance — the bridge still receives every message
+    // untouched. This notes the mark beside the request and gets out of the way.
+    onMessage: (handler) =>
+      channel.onMessage((data) => {
+        if (data !== null && typeof data === "object" && data.type === VIEW_MESSAGE.submit && typeof data.requestId === "string") {
+          gestures.set(data.requestId, data[${JSON.stringify(GESTURE_MARK)}] === true);
+        }
+        handler(data);
+      }),
     close: channel.close,
   };
 };
@@ -191,6 +224,7 @@ window.__preview = {
     outbound = [];
     submitted = [];
     notices = [];
+    gestures = new Map();
     answer = null;
     datasets = page.datasets;
     viewer = page.viewer ?? null;
@@ -217,7 +251,10 @@ window.__preview = {
       submitted,
       refused: refusals(),
       notices,
-      pending: pendingValue === null ? null : { cid: pendingValue.cid, values: pendingValue.values },
+      pending:
+        pendingValue === null
+          ? null
+          : { cid: pendingValue.cid, values: pendingValue.values, clickCaused: gestures.get(pendingValue.requestId) === true },
     };
   },
   /** Answer the confirmation the way a visitor who changed their mind would. */
