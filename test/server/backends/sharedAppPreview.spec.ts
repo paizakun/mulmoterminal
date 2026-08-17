@@ -103,7 +103,13 @@ const schemaFor = (slug: string) => ({
   icon: "star",
   primaryKey: "id",
   storage: { type: "firestore" },
-  fields: { id: { type: "string", label: "ID", primary: true, required: true }, note: { type: "string", label: "Note" } },
+  fields: {
+    id: { type: "string", label: "ID", primary: true, required: true },
+    note: { type: "string", label: "Note" },
+    // A window bound the declaration below points at. The publish gate checks that the field it
+    // names EXISTS, so a fixture without it now fails before the case it is testing.
+    closesAt: { type: "number", label: "Closes" },
+  },
 });
 
 function writeCollection(root: string, slug: string): void {

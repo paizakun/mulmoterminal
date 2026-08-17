@@ -38,7 +38,7 @@ import { parseWaitGraceMs, reapDecisionFor, reapTimerDelay, shouldForgetActivity
 import { sessionRow, shouldRefreshReply } from "./activity-transition.js";
 import { flagEffect, type ActivityFlag } from "./activity-flag.js";
 import type { WorkPhase } from "./workPhase.js";
-import { readLatestResponse } from "./session-reads.js";
+import { forgetHistoryMemo, readLatestResponse } from "./session-reads.js";
 import { cleanupSessionSettings } from "./session-settings.js";
 import { cleanupSessionDrops } from "./session-drops.js";
 import { runCompletionHook } from "./completion-hooks.js";
@@ -163,6 +163,9 @@ function reap(deps: SessionLifecycleDeps, id: string) {
   // process that reissues it, and a kept mapping would read the NEXT conversation's prompts under
   // the last one's id.
   claudeSessionIds.delete(id);
+  // The resumed prompt-history scan is only true of the ids and the floor it was taken under, both
+  // of which die with the session (#1750).
+  forgetHistoryMemo(id);
   // The transcript stops being frozen here: the next claude on this id (`--resume`, or a restart
   // after `/exit` — which reaches reap through term.onExit) appends to that file again.
   forgetClearedTranscript(id);

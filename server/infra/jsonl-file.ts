@@ -11,6 +11,7 @@
 // when it will come BACK to the same growing file — reading it whole every time is cheap enough to
 // miss until fifty of them are read on every request (#1377).
 import { createReadStream, closeSync, openSync, readSync, statSync } from "node:fs";
+import type { FileHandle } from "node:fs/promises";
 import readline from "node:readline";
 import { isRecord } from "../../common/isRecord.js";
 
@@ -87,6 +88,14 @@ export interface JsonlRange {
   atLineStart?: boolean;
 }
 
+/** What a range fold reads from: a path, or a file the caller already holds open.
+ *
+ *  A path is re-resolved on every read, so two reads of one path can land on two different files —
+ *  and a reader that folds a range and then checks something else about "the file" has no way to
+ *  say the two saw the same one. A handle IS the file: it keeps reading what it opened even after
+ *  the path is replaced, so everything read through it describes one object (CodeRabbit, #1750). */
+export type JsonlSource = string | FileHandle;
+
 /** Fold the records inside a byte range, and answer where the scan stopped. A file that is only ever
  *  appended to can be re-scanned from that offset and the two folds are the same fold — which is
  *  what lets a reader keep a derived value up to date without paying for the whole file again
@@ -98,7 +107,7 @@ export interface JsonlRange {
  *  folded (matching forEachJsonlRecord, which yields it) and a broken one is left uncounted for the
  *  next scan to pick up whole. At a `to` boundary there is no such question: the cut is arbitrary
  *  and its last line is never folded. */
-export async function forEachJsonlRecordIn(file: string, range: JsonlRange, onRecord: (record: Record<string, unknown>) => void): Promise<number> {
+export async function forEachJsonlRecordIn(file: JsonlSource, range: JsonlRange, onRecord: (record: Record<string, unknown>) => void): Promise<number> {
   const from = range.from ?? 0;
   let offset = from;
   let dropLeading = from > 0 && !(range.atLineStart ?? from === 0);
@@ -133,26 +142,52 @@ function jsonlRecord(line: string): Record<string, unknown> | null {
 //
 // The final line arrives flagged `unterminated` when the range ran to EOF and it had no newline;
 // the caller decides what that means.
-async function forEachCompleteLine(file: string, range: JsonlRange, onLine: (line: string, bytes: number, unterminated: boolean) => void): Promise<void> {
+async function forEachCompleteLine(file: JsonlSource, range: JsonlRange, onLine: (line: string, bytes: number, unterminated: boolean) => void): Promise<void> {
   const from = range.from ?? 0;
   if (range.to !== undefined && range.to <= from) return; // an empty range reads nothing
-  const stream = createReadStream(file, { start: from, ...(range.to === undefined ? {} : { end: range.to - 1 }) });
   // Held across chunks, because a line is split wherever the chunk boundary happens to fall.
   // Copied rather than kept as a view: a subarray pins the whole chunk it came from.
   let carry: Buffer = Buffer.alloc(0);
-  try {
-    for await (const chunk of stream) {
-      const buf: Buffer = carry.length ? Buffer.concat([carry, asBuffer(chunk)]) : asBuffer(chunk);
-      let start = 0;
-      for (let nl = buf.indexOf(NEWLINE, start); nl !== -1; nl = buf.indexOf(NEWLINE, start)) {
-        onLine(buf.subarray(start, nl).toString("utf8"), nl - start + 1, false);
-        start = nl + 1;
-      }
-      carry = start === 0 ? buf : Buffer.from(buf.subarray(start));
+  for await (const chunk of rangeChunks(file, from, range.to)) {
+    const buf: Buffer = carry.length ? Buffer.concat([carry, chunk]) : chunk;
+    let start = 0;
+    for (let nl = buf.indexOf(NEWLINE, start); nl !== -1; nl = buf.indexOf(NEWLINE, start)) {
+      onLine(buf.subarray(start, nl).toString("utf8"), nl - start + 1, false);
+      start = nl + 1;
     }
-    if (carry.length && range.to === undefined) onLine(carry.toString("utf8"), carry.length, true);
-  } finally {
-    stream.destroy();
+    carry = start === 0 ? buf : Buffer.from(buf.subarray(start));
+  }
+  if (carry.length && range.to === undefined) onLine(carry.toString("utf8"), carry.length, true);
+}
+
+/** How much is read per positional read. Only the handle path uses it — a stream picks its own. */
+const CHUNK_BYTES = 64 * 1024;
+
+/** The bytes of `[from, to)`, however the source hands them over.
+ *
+ *  A path streams. A HANDLE is read positionally instead, and that is not a style choice: a stream
+ *  built from a FileHandle closes the handle when it is destroyed — `autoClose: false` does not stop
+ *  it, measured on node 24 — and the caller opened this handle precisely because it has more to read
+ *  from the same file afterwards. Positional reads leave it exactly as they found it, including its
+ *  position, so several of them can interleave with the caller's own. */
+async function* rangeChunks(file: JsonlSource, from: number, to: number | undefined): AsyncGenerator<Buffer> {
+  if (typeof file === "string") {
+    const stream = createReadStream(file, { start: from, ...(to === undefined ? {} : { end: to - 1 }) });
+    try {
+      for await (const chunk of stream) yield asBuffer(chunk);
+    } finally {
+      stream.destroy();
+    }
+    return;
+  }
+  for (let at = from; ;) {
+    const want = to === undefined ? CHUNK_BYTES : Math.min(CHUNK_BYTES, to - at);
+    if (want <= 0) return;
+    const buf = Buffer.alloc(want);
+    const { bytesRead } = await file.read(buf, 0, want, at);
+    if (bytesRead === 0) return; // EOF
+    at += bytesRead;
+    yield bytesRead === want ? buf : buf.subarray(0, bytesRead);
   }
 }
 

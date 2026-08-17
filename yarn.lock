@@ -183,10 +183,10 @@
     "@lezer/common" "^1.0.0"
     "@lezer/go" "^1.0.0"
 
-"@codemirror/lang-html@^6.0.0", "@codemirror/lang-html@^6.4.11":
-  version "6.4.11"
-  resolved "https://registry.yarnpkg.com/@codemirror/lang-html/-/lang-html-6.4.11.tgz#c46ba46ae642fd567cf05c4129005d2913ac248d"
-  integrity sha512-9NsXp7Nwp891pQchI7gPdTwBuSuT3K65NGTHWHNJ55HjYcHLllr0rbIZNdOzas9ztc1EUVBlHou85FFZS4BNnw==
+"@codemirror/lang-html@^6.0.0", "@codemirror/lang-html@^6.4.12":
+  version "6.4.12"
+  resolved "https://registry.yarnpkg.com/@codemirror/lang-html/-/lang-html-6.4.12.tgz#ca5dc0f741c1e819182bce9d03b073552172b1b7"
+  integrity sha512-pw2ReWKUqSkbvh76RAT4NYxiogRu+PWkR2ukAwO9uOgrm8uipkzjtKKtNpyeAQwHOqxEeSvAXZ6vr3AfyB9y/w==
   dependencies:
     "@codemirror/autocomplete" "^6.0.0"
     "@codemirror/lang-css" "^6.0.0"
@@ -227,10 +227,10 @@
     "@codemirror/language" "^6.0.0"
     "@lezer/json" "^1.0.0"
 
-"@codemirror/lang-markdown@^6.5.1":
-  version "6.5.1"
-  resolved "https://registry.yarnpkg.com/@codemirror/lang-markdown/-/lang-markdown-6.5.1.tgz#eb53c488e368b8fa581409a06531dfedd573d88c"
-  integrity sha512-6re5avCNfyRMIoi3XNjbEfQM1vTeVD3JS3g/Fyegyso/eoANFM71Cyvbb66LDyYtQLMEcRFlzioywCqDo9SlLA==
+"@codemirror/lang-markdown@^6.5.2":
+  version "6.5.2"
+  resolved "https://registry.yarnpkg.com/@codemirror/lang-markdown/-/lang-markdown-6.5.2.tgz#530b91442c035ca5d4ea5135c0499b2c15c39872"
+  integrity sha512-AwBOdkWYuA//WcM0xO5PfHPUcmz/O2i5o0Nsg1U69SII/loCJlFI1Romd9xp2HYb1kYJRGZotyqRghuHH5n8Kw==
   dependencies:
     "@codemirror/autocomplete" "^6.7.1"
     "@codemirror/lang-html" "^6.0.0"
@@ -1121,10 +1121,10 @@
     protobufjs "^7.5.4"
     ws "^8.18.0"
 
-"@google/genai@^2.13.0", "@google/genai@^2.16.0":
-  version "2.16.0"
-  resolved "https://registry.yarnpkg.com/@google/genai/-/genai-2.16.0.tgz#de943aff150dda28e7c08d5ac8781748c928ee27"
-  integrity sha512-K+1C1sqR0u7NJ5xpKJCQBws0QXpfuklo3WTNuUIMvtbQfNW2O5OohX0BYT2V+PXzsUzQEwGCXPWQxttLyGQ6xw==
+"@google/genai@^2.13.0", "@google/genai@^2.17.1":
+  version "2.17.1"
+  resolved "https://registry.yarnpkg.com/@google/genai/-/genai-2.17.1.tgz#8d13d4f00e9534eb67eacad08d9572382e40f6ef"
+  integrity sha512-CdZ3M/titoH81hXXkvOikrOW26bC9IXh9iYT7u+r+5p7wi1LnMEnB0AbJfDeWAkjuneP4oJ299BtCt6twmORWg==
   dependencies:
     google-auth-library "^10.3.0"
     p-retry "^4.6.2"
@@ -1827,10 +1827,10 @@
   resolved "https://registry.yarnpkg.com/@mozilla/readability/-/readability-0.6.0.tgz#134e3ce3ff1676716e550de0b8de957bcc59208b"
   integrity sha512-juG5VWh4qAivzTAeMzvY9xs9HY5rAcr2E4I7tiSSCokRFi7XIZCAu92ZkSTsIj1OPceCifL3cpfteP3pDT9/QQ==
 
-"@mulmobridge/web-push@^1.0.1":
-  version "1.0.1"
-  resolved "https://registry.yarnpkg.com/@mulmobridge/web-push/-/web-push-1.0.1.tgz#8243ffee8c3b677bf885af928a89055a683538c4"
-  integrity sha512-ZnL6Sij5411VhPLqbey2p2Q1rR5E2nSnE1encKmzcVb6eHex+UUtmu8vmXwNmU0JLbBL+tQL5HMwhz8qdqKBBA==
+"@mulmobridge/web-push@^1.1.0":
+  version "1.1.0"
+  resolved "https://registry.yarnpkg.com/@mulmobridge/web-push/-/web-push-1.1.0.tgz#a035031c91a377ce1f6d82735350c25f887af24e"
+  integrity sha512-lRDLEmfCGm3JA6xoaVzlReoHxxCBfYhaO1l3rd1V2aDnXYPxIjbDjuANvVAZ4JL3rNyRDmzbL3GQjG2lPPB1Yw==
 
 "@mulmocast/deck-web@^1.1.1":
   version "1.1.1"
@@ -1869,20 +1869,17 @@
   resolved "https://registry.yarnpkg.com/@mulmochat-plugin/ui-image/-/ui-image-0.4.1.tgz#8fd3b1c4ffe21e6bc22761ff48eac03306e0d345"
   integrity sha512-I3AqTIuQPsSMNxDON9UTxT2KO57HV6uUVotCIFskV0UqBMQrQ3FUu8J+qXRWDdjPyYaHoC8AJsi91TbNrOMwng==
 
-"@mulmoclaude/accounting-plugin@^2.2.0":
-  version "2.2.0"
-  resolved "https://registry.yarnpkg.com/@mulmoclaude/accounting-plugin/-/accounting-plugin-2.2.0.tgz#1405a466cab68d1e886348b1b15a80687ee41c0e"
-  integrity sha512-Tmn3cP71w2k7j7+Q8UoTFxZ3erifpl9TIw7BBiGpNEAfRRu9m3Kx0Q2mhfkAPspuE/zwVI4QQdsDkZVxUW2FQg==
+"@mulmoclaude/accounting-plugin@^3.0.0":
+  version "3.0.0"
+  resolved "https://registry.yarnpkg.com/@mulmoclaude/accounting-plugin/-/accounting-plugin-3.0.0.tgz#dd761b0e54b469b9990d72aa75b306a2238bb9f7"
+  integrity sha512-qnfgPhOYylZkKBodGGuvwr4mrL8/wQzGIri1DgemJxvGz0BBr3Eh4/khMskXDgx1pn3/hmdorBv1AlcbtYkmCA==
   dependencies:
     "@mulmoclaude/common" "^1.2.0"
-    "@mulmoclaude/core" "^3.1.0"
 
-"@mulmoclaude/chart-plugin@^2.1.0":
-  version "2.1.0"
-  resolved "https://registry.yarnpkg.com/@mulmoclaude/chart-plugin/-/chart-plugin-2.1.0.tgz#20b89b75771be741fa9ecbe02759f68e0d846f59"
-  integrity sha512-VQ0Vewx4oYIC663M4BHzXsD7w0f9i9ycYO4SuYlFMQ2aTwwWyXIjGTzSc8BHnwW8Yt+oCXICwmGF6d/bX1YY3A==
-  dependencies:
-    "@mulmoclaude/core" "^3.0.0"
+"@mulmoclaude/chart-plugin@^3.0.0":
+  version "3.0.0"
+  resolved "https://registry.yarnpkg.com/@mulmoclaude/chart-plugin/-/chart-plugin-3.0.0.tgz#adadc685f2bcc4ce3fb662a4750f2bcdf32b6c07"
+  integrity sha512-787wJuE4Hr4UGDujUgjzdX2+dj2WiyMZ0Z1UaHX3L8jdnQyONnGDK6HrA2sARYGfwrNVsHgK3Ku3ZbfCZxndPA==
 
 "@mulmoclaude/collection-plugin@^4.2.0":
   version "4.2.0"
@@ -1912,64 +1909,30 @@
     js-yaml "^5.2.3"
     zod "^4.4.3"
 
-"@mulmoclaude/core@^3.0.0":
-  version "3.0.0"
-  resolved "https://registry.yarnpkg.com/@mulmoclaude/core/-/core-3.0.0.tgz#4cdc36c2fd190568cba78c6cf10772c24e9a353b"
-  integrity sha512-CCX9K2xDXoCiMhGep+S2fcom2SI3ioTvddqtwwuYiWfgTT2N7mKleQcqyEi82g5QXXW6WHwRv/3USQXO5MhXrw==
-  dependencies:
-    "@duckdb/node-api" "^1.5.5-r.2"
-    "@mulmoclaude/common" "^1.2.0"
-    "@mulmoclaude/markdown-utils" "^1.3.5"
-    dompurify "^3.4.13"
-    fast-xml-parser "^5.10.1"
-    google-auth-library "^10.9.1"
-    iconv-lite "^0.7.3"
-    js-yaml "^5.2.3"
-    zod "^4.4.3"
-
-"@mulmoclaude/core@^3.1.0", "@mulmoclaude/core@^3.4.0":
-  version "3.11.0"
-  resolved "https://registry.yarnpkg.com/@mulmoclaude/core/-/core-3.11.0.tgz#66605dab3e90c233f49c50c01ec88b8aba91bc8c"
-  integrity sha512-vxR6xaJdHCdNPGXE1036EYQBl6pVFyIr3Eo/qcvzHHjNA8OZbUPvqR4XTNjGtyt0XWkcxE79rpHGr6SiQzkYFg==
-  dependencies:
-    "@duckdb/node-api" "^1.5.5-r.2"
-    "@mulmoclaude/common" "^1.2.0"
-    "@mulmoclaude/markdown-utils" "^1.3.5"
-    dompurify "^3.4.13"
-    fast-xml-parser "^5.10.1"
-    google-auth-library "^10.9.1"
-    iconv-lite "^0.7.3"
-    js-yaml "^5.2.3"
-    zod "^4.4.3"
-
 "@mulmoclaude/form-plugin@^2.0.0":
   version "2.0.0"
   resolved "https://registry.yarnpkg.com/@mulmoclaude/form-plugin/-/form-plugin-2.0.0.tgz#bdd7f65afa2d121caeac8978d81db5875516113e"
   integrity sha512-5bcCzVFf0om4A/Xv7bsDKcdX9RW1i5OpzQ86m4jY+3UUowmUDwujeO9RkgH/iTdYp6gTR5qdmRIjAVNeqcuKrQ==
 
-"@mulmoclaude/google-plugin@^2.2.0":
-  version "2.2.0"
-  resolved "https://registry.yarnpkg.com/@mulmoclaude/google-plugin/-/google-plugin-2.2.0.tgz#0c01bafc0e2755038a40955d72bef3ff9c09f8ab"
-  integrity sha512-vpfYanepUyyin1Wn5TykJGf0jVZPNSIpLxn8cVg/AvrfQNV59ub4zIlnBfkQRe4sMVCis4DSLwvPkS7DQeaQUw==
-  dependencies:
-    "@mulmoclaude/core" "^3.4.0"
-
-"@mulmoclaude/html-plugin@^3.0.0":
+"@mulmoclaude/google-plugin@^3.0.0":
   version "3.0.0"
-  resolved "https://registry.yarnpkg.com/@mulmoclaude/html-plugin/-/html-plugin-3.0.0.tgz#ac301471e31ac60459abd70ad0071da0c8494717"
-  integrity sha512-Uhd0h+ioftBHNcqwzHzwMCmQZTObgfix12/m9jMDBaB2PHLdCbtPdpR2eH5vcXpxRUspSCLLXmLyttrdXNrhwg==
+  resolved "https://registry.yarnpkg.com/@mulmoclaude/google-plugin/-/google-plugin-3.0.0.tgz#8b03520aa5a2cb2ca2b0f175083a349fb4e325d9"
+  integrity sha512-U3bJsU4tByXOyKgsQqUUvBsHFz1dVy7Lg97cTy2K3QqElZ+tzTQ9DVx73a6xmKRd/mpdxzP0OP6fBPjmJDaiLQ==
+
+"@mulmoclaude/html-plugin@^4.0.0":
+  version "4.0.0"
+  resolved "https://registry.yarnpkg.com/@mulmoclaude/html-plugin/-/html-plugin-4.0.0.tgz#85f13713a00f5e8cd2b6749b63f61d1ad2592325"
+  integrity sha512-F/lZY6Vo50hreXjxOhtSu8mOKHtcS+Ct3YWdJmzRRgKImSLW76lteqxA2HBw59aFf6nGivNGMiQ27f5FKrCl8g==
   dependencies:
     "@mulmoclaude/common" "^1.2.0"
-    "@mulmoclaude/core" "^3.0.0"
 
-"@mulmoclaude/markdown-plugin@^3.0.0":
-  version "3.0.0"
-  resolved "https://registry.yarnpkg.com/@mulmoclaude/markdown-plugin/-/markdown-plugin-3.0.0.tgz#7f7833d231afaa45e230d3006d8b89846e4ee6a9"
-  integrity sha512-PPqqIjz/A0ssA27CBowULyCHr7qLhavmOL3j9f69kwl34+NwmvFBgrpOpWVvR6dTPnePlhh0d/epDlXVvR4PBA==
+"@mulmoclaude/markdown-plugin@^4.0.0":
+  version "4.0.0"
+  resolved "https://registry.yarnpkg.com/@mulmoclaude/markdown-plugin/-/markdown-plugin-4.0.0.tgz#8f3928bbfad041f534550b32760384a944c88321"
+  integrity sha512-QF/ftLm72NenSv4tQf3W56fzY9Ba7UaRsCRP0FEyLvn+xDm/8fR/dbwxLDpb9xa0kkAW5AIRSU/qwwb3secftw==
   dependencies:
     "@marp-team/marp-core" "^4.4.0"
     "@mulmoclaude/common" "^1.2.0"
-    "@mulmoclaude/core" "^3.0.0"
     "@mulmoclaude/markdown-utils" "^1.3.5"
     js-yaml "^5.2.3"
     marked "^18.0.7"
@@ -1984,13 +1947,12 @@
     js-yaml "^5.2.3"
     marked "^18.0.7"
 
-"@mulmoclaude/mulmoscript-plugin@^2.1.0":
-  version "2.1.0"
-  resolved "https://registry.yarnpkg.com/@mulmoclaude/mulmoscript-plugin/-/mulmoscript-plugin-2.1.0.tgz#b955f50ac8dbdb52c52839ae1766ba56149cde58"
-  integrity sha512-iPPsHdqDJNgSDrrz/PACLVsM08E+XRyuB4s3Xq+TrjRGbfqxkwRtusA7OFXCKIyGkCwhIDOf8CdxeZKpDJayTQ==
+"@mulmoclaude/mulmoscript-plugin@^3.0.0":
+  version "3.0.0"
+  resolved "https://registry.yarnpkg.com/@mulmoclaude/mulmoscript-plugin/-/mulmoscript-plugin-3.0.0.tgz#3d5aae5b3bd596536c93eec5eadd3fa3b18715c0"
+  integrity sha512-SsZfsY8BP1ydz4ZOlgNowzghAOrm/mWdnCCTOnTxTtL2OHgM5dNHsIaywxMlYUxtesJgOXKths4tcNg/GlHUGA==
   dependencies:
     "@mulmoclaude/common" "^1.2.0"
-    "@mulmoclaude/core" "^3.0.0"
 
 "@mulmoclaude/x-plugin@^1.0.3":
   version "1.0.3"
@@ -2302,10 +2264,10 @@
     modern-tar "^0.8.0"
     yargs "^18.0.0"
 
-"@receptron/sharedapp@^0.7.2":
-  version "0.7.2"
-  resolved "https://registry.yarnpkg.com/@receptron/sharedapp/-/sharedapp-0.7.2.tgz#6a0fef957f70a4a2b905120852c7dde5f5861334"
-  integrity sha512-b5ss3WVXwRgpIKQ1OhQKiGLtTUiFCYaYGMHQoFdZXItJOE/ggCofQpov0jx0i06+zcp136aIdRW7YrcXk96XWQ==
+"@receptron/sharedapp@^0.8.0":
+  version "0.8.0"
+  resolved "https://registry.yarnpkg.com/@receptron/sharedapp/-/sharedapp-0.8.0.tgz#13279c8b51d83069580baefdb2052c55c8b89275"
+  integrity sha512-9wqfzOewdIg5ip3fAOpFxJyr9gUptY60MMeKIAxgiC9YeTsYZAMn3VR6cqWx4rkoBS3Jsh8KMMg3jHZztSTFDw==
   dependencies:
     zod "^4.1.13"
 
@@ -3206,10 +3168,10 @@
   resolved "https://registry.yarnpkg.com/@vue/devtools-shared/-/devtools-shared-8.1.5.tgz#fc59c1483cb05557ca501699e61239c66599db1c"
   integrity sha512-mhT4zcPFhF+Xk1O4BfhhrbXzpmfqY03fS6xGpcllbQG7lDjhQf8pQHcTIhqQIYx1hfwtHmk/6jM96ele0UxPqQ==
 
-"@vue/language-core@3.3.9":
-  version "3.3.9"
-  resolved "https://registry.yarnpkg.com/@vue/language-core/-/language-core-3.3.9.tgz#c675857fcb74177e9a29f86cb749574949a10dd4"
-  integrity sha512-in/68oAa4BCtVY6n/nkuhLIkV8DHYd2UivedJ6cMZ6UYtlq9jaoaSNUBHYCVO44z3nKg7MdE5OBoHKt5SxeBKQ==
+"@vue/language-core@3.3.10":
+  version "3.3.10"
+  resolved "https://registry.yarnpkg.com/@vue/language-core/-/language-core-3.3.10.tgz#8542b6906fd7235d5555869881c7a5384566f077"
+  integrity sha512-CR7ByBbgPHqhxrioKPOcZBqttaozzLNwtkCzXQ+uF8gLPHnUe03srPnGpdtHD3zp+bq5iyVkZ1WNx7W564RPwg==
   dependencies:
     "@volar/language-core" "2.4.28"
     "@vue/compiler-dom" "^3.5.0"
@@ -3834,10 +3796,10 @@ compress-commons@^7.0.0:
     normalize-path "^3.0.0"
     readable-stream "^4.0.0"
 
-concurrently@^10.0.4:
-  version "10.0.4"
-  resolved "https://registry.yarnpkg.com/concurrently/-/concurrently-10.0.4.tgz#68ee55d60cbc3fee705958508fd5905acfc7514a"
-  integrity sha512-trZql+7l/0+WRAsAnEdctr4+iiOS6ZrViI6H8QWcCF9MFS/LT0dKpe8vluB1to6it+OxSI4VospFTIFMW8DJRw==
+concurrently@^10.0.5:
+  version "10.0.5"
+  resolved "https://registry.yarnpkg.com/concurrently/-/concurrently-10.0.5.tgz#5dd22464ad37f77136a02f4d0f05ddd912fe5c80"
+  integrity sha512-JaP/CoftUrCcAFW/g//RbgEGwlelnEae6cfBLgH6ZdO6s8jPkn6p9SB9u6pdVxYXoiSnFqseOlHfrEfF82TVOg==
   dependencies:
     chalk "5.6.2"
     rxjs "7.8.2"
@@ -5251,15 +5213,10 @@ glob@^10.3.7, glob@^10.4.2:
     package-json-from-dist "^1.0.0"
     path-scurry "^1.11.1"
 
-globals@^17.10.0:
-  version "17.10.0"
-  resolved "https://registry.yarnpkg.com/globals/-/globals-17.10.0.tgz#f9dbd847ae99e236f98b13095e2426ac3b25a45c"
-  integrity sha512-V0kztuWST2k8A/VbxAY8+L+7+Rgo3fyA24IHRLrZp7HOzJjV0gHSaZUjK9lpP/IrBSNite2tZ1prhRkinRu1CA==
-
-globals@^17.7.0:
-  version "17.9.0"
-  resolved "https://registry.yarnpkg.com/globals/-/globals-17.9.0.tgz#e43f252d6bbe71508da43902a1709c8895a59f70"
-  integrity sha512-m/MvAW61QVU5VDNF1Vj8axt016h8w7L5TU1e9zlab7XIttAT2YAlCwl75K1fOqvMM9apmD7lbCIRhpfkhmxhCg==
+globals@^17.11.0, globals@^17.7.0:
+  version "17.11.0"
+  resolved "https://registry.yarnpkg.com/globals/-/globals-17.11.0.tgz#d643485bb30220d7751e511cf4f68c73d3870d87"
+  integrity sha512-Z2I8hM+PbJDXQDq3Icgpzv+mPdwr68iZUU9d5WW4FuXfDUQfkZaZuvjMv42/5crNyw154+9+VWXbYrUgDXbxNw==
 
 google-auth-library@10.5.0:
   version "10.5.0"
@@ -7949,13 +7906,13 @@ vue-router@^5.2.0:
     unplugin-utils "^0.3.2"
     yaml "^2.9.0"
 
-vue-tsc@^3.3.9:
-  version "3.3.9"
-  resolved "https://registry.yarnpkg.com/vue-tsc/-/vue-tsc-3.3.9.tgz#ac4cc15f0d4700a79b49a4238e848fb683135602"
-  integrity sha512-TS3Y1ux/IRoE8OCP2PpACAeOseuIs0UvWrcr7u+w3PmfY+SlCfEf8zjrBgnQksHUgLpthi5vHlffcQTQTdPBZA==
+vue-tsc@^3.3.10:
+  version "3.3.10"
+  resolved "https://registry.yarnpkg.com/vue-tsc/-/vue-tsc-3.3.10.tgz#ca13bc4baee4aea6cd355be3c1e1ea4f0f5db23b"
+  integrity sha512-YaDVxcW+CGtaOt3pZahMG5jYPx0hsUTxyEoPOTSMebcGUXP9lIBabQ14vfKMORb2CqqK5CxsNo/d1d+4IQwiKg==
   dependencies:
     "@volar/typescript" "2.4.28"
-    "@vue/language-core" "3.3.9"
+    "@vue/language-core" "3.3.10"
 
 vue@^3.5.41:
   version "3.5.41"

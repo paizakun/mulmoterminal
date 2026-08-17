@@ -16,8 +16,6 @@
 // benefit.
 import { COMPUTED_TYPES, type CollectionFieldType, type CollectionSchema } from "@mulmoclaude/core/collection";
 import type { AuthoredApp } from "@receptron/sharedapp";
-import type { LoadedCollection } from "@mulmoclaude/core/collection/server";
-import type { StagedEntry } from "./staged.js";
 
 /** The field types a STRANGER may be asked to fill in.
  *
@@ -86,13 +84,12 @@ export type PublicForm = Record<string, PublicCollectionForm>;
  *  Read from the STAGED schemas — the version publish is promoting — for the same reason the
  *  promotion itself is: what ships is what the roster reviewed, not what the working tree says
  *  now. */
-export function publicFormOf(authored: AuthoredApp, staged: readonly StagedEntry[]): PublicForm {
+export function publicFormOf(authored: AuthoredApp, schemas: readonly { cid: string; schema: CollectionSchema }[]): PublicForm {
   const submit = authored.public?.submit ?? {};
-  const byCid = new Map(staged.map((entry) => [entry.cid, entry.doc]));
+  const byCid = new Map(schemas.map((entry) => [entry.cid, entry.schema]));
   const entries = Object.entries(submit).flatMap(([cid, spec]) => {
-    const doc = byCid.get(cid);
-    if (doc === undefined) return [];
-    const schema = doc.publishedSchema;
+    const schema = byCid.get(cid);
+    if (schema === undefined) return [];
     // The stamped field is EXCLUDED from the drawn inputs. It is in
     // `createFields` because the rules refuse any key outside that list, not
     // because a visitor answers it — drawing it would invite an answer the
@@ -108,26 +105,19 @@ export function publicFormOf(authored: AuthoredApp, staged: readonly StagedEntry
     // it would leave the page with no submit target and no way to learn the field name the rules
     // insist on, for a declaration core accepts.
     if (Object.keys(fields).length === 0 && spec.stampField === undefined) return [];
-    // From the STAGED rule configuration, not from `app.json`. What the rules will check is
-    // `apps/{aid}.collections[cid].statusField`, and publish promotes that from `staging/{cid}` —
-    // deliberately, so a manifest edit between deploy and publish cannot change the rule behaviour
-    // being published. Reading the manifest here would re-open exactly that gap from the other
-    // side: deploy with `statusField: "state"`, edit it to `status`, publish, and the page writes
-    // a key the promoted rule does not accept, so every submission is denied with nothing on the
-    // page to say why.
-    const statusField = doc.config?.statusField;
-    // `stampField` comes from the SUBMIT declaration rather than from the
-    // staged rule configuration, because that is where the rules read it: it
-    // lives in `public.submit[cid]`, which publish writes from the manifest.
+    // From the manifest, which is what publish writes to `apps/{aid}.collections[cid].statusField`
+    // in the same operation as this form. It used to be read back from the STAGED rule
+    // configuration, because publish promoted that rather than the manifest and the two could
+    // disagree — the page would then write a key the promoted rule did not accept, and every
+    // submission was denied with nothing on the page to say why. One operation, one answer.
+    const statusField = authored.collections?.[cid]?.statusField;
+    // `stampField` comes from the SUBMIT declaration, because that is where the
+    // rules read it: it lives in `public.submit[cid]`.
     const stampField = spec.stampField;
     return [[cid, { fields, ...(statusField === undefined ? {} : { statusField }), ...(stampField === undefined ? {} : { stampField }) }] as const];
   });
   return Object.fromEntries(entries);
 }
-
-/** Which version of the schemas a check is reading, because the answer differs and the author has
- *  to be told which one disagreed with the declaration. */
-export type SchemaSource = "tree" | "staged";
 
 /** What is wrong with the fields a declaration opens for public submission, in the author's terms.
  *
@@ -137,32 +127,24 @@ export type SchemaSource = "tree" | "staged";
  *  from the form would still leave the app accepting a written value for a field the host computes,
  *  from anybody on the internet, with nothing on the page to show for it.
  *
- *  Run TWICE, against both versions, and that is the point rather than duplication: deploy checks
- *  the working tree it is about to stage, so the answer arrives before the first write; publish
- *  checks the STAGED schemas, because those are what it promotes and the two can have drifted
- *  since. A field added to the tree and to `createFields` but never deployed passes the first
- *  check and would otherwise ship as a rule that demands a field the form cannot draw. */
-export function publicInputProblems(app: AuthoredApp, schemas: readonly { cid: string; schema: CollectionSchema }[], source: SchemaSource = "tree"): string[] {
+ *  It used to run TWICE — once against the working tree at deploy and once against the STAGED
+ *  schemas at publish, because those were what publish promoted and the two could drift. There is
+ *  one version now (`plans/feat-shared-app-no-staging.md`), so there is one answer. */
+export function publicInputProblems(app: AuthoredApp, schemas: readonly { cid: string; schema: CollectionSchema }[]): string[] {
   const submit = app.public?.submit ?? {};
   const byCid = new Map(schemas.map((entry) => [entry.cid, entry.schema]));
   return Object.entries(submit).flatMap(([cid, spec]) => {
     const schema = byCid.get(cid);
-    // A cid with no schema here is not this check's to report: at deploy the declaration names a
-    // collection the repository does not have (`publishProblems` says so), and at publish the
-    // staged set is matched against the repository by the gate above.
+    // A cid with no schema here is not this check's to report: the declaration names a collection
+    // the repository does not have, and `publishProblems` says so.
     if (schema === undefined) return [];
-    return spec.createFields.flatMap((name) => problemWith(cid, name, schema, source));
+    return spec.createFields.flatMap((name) => problemWith(cid, name, schema));
   });
 }
 
-/** The schemas as this check reads them — a `LoadedCollection` keys its schema by `slug`. */
-export function schemasOfCollections(collections: readonly LoadedCollection[]): { cid: string; schema: CollectionSchema }[] {
-  return collections.map((collection) => ({ cid: collection.slug, schema: collection.schema }));
-}
-
-function problemWith(cid: string, name: string, schema: CollectionSchema, source: SchemaSource): string[] {
+function problemWith(cid: string, name: string, schema: CollectionSchema): string[] {
   // Own-property guarded: `toString` must miss here rather than match an Object.prototype member.
-  if (!Object.hasOwn(schema.fields, name)) return [unknownField(cid, name, source)];
+  if (!Object.hasOwn(schema.fields, name)) return [unknownField(cid, name)];
   const spec = schema.fields[name];
   if (spec === undefined || PUBLIC_INPUT_TYPES.has(spec.type)) return [];
   const why = COMPUTED_TYPES.has(spec.type)
@@ -176,21 +158,12 @@ function problemWith(cid: string, name: string, schema: CollectionSchema, source
 
 /** A name in `createFields` that the schema does not declare.
  *
- *  Refused rather than ignored, and for a different reason at each version. Against the tree it is
- *  a typo that would still reach the rules, which would then accept that key from anybody on the
- *  internet — a field nothing declares and nothing validates. Against the staged schemas it is the
- *  drift: the rules about to be published would REQUIRE a field the published form cannot draw,
- *  so a visitor filling the form in correctly is refused with nothing to fix. */
-function unknownField(cid: string, name: string, source: SchemaSource): string {
-  const version =
-    source === "tree"
-      ? `'${cid}' does not declare a field called '${name}'`
-      : `the staged version of '${cid}' — the one publish promotes — has no field called '${name}', even if this repository's schema does now`;
-  const fix =
-    source === "tree"
-      ? "Fix the name, or add the field to the schema."
-      : "Run deploy again, so the version being published is the one the declaration describes.";
-  return `public.submit.${cid}.createFields names '${name}', but ${version}. ${fix}`;
+ *  Refused rather than ignored: it is a typo that would still reach the rules, which would then
+ *  accept that key from anybody on the internet — a field nothing declares and nothing validates.
+ *  And the rules published beside it would REQUIRE the field, so a visitor filling the form in
+ *  correctly is refused with nothing to fix. */
+function unknownField(cid: string, name: string): string {
+  return `public.submit.${cid}.createFields names '${name}', but '${cid}' does not declare a field called '${name}'. Fix the name, or add the field to the schema.`;
 }
 
 function fieldsOf(

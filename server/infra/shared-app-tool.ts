@@ -12,7 +12,6 @@
 // shared-collections capability and binds the Firestore accessor — an action left in core would
 // simply work here, and it wrote `public` without ever passing through staging.
 import type { ToolDefinition } from "gui-chat-protocol";
-import { deploySharedApp } from "../backends/sharedApp/deploy.js";
 import { headlessPreview } from "../backends/sharedApp/headlessPreview.js";
 import { narrateHeadlessRun } from "../backends/sharedApp/headlessReport.js";
 import { publishSharedApp } from "../backends/sharedApp/publish.js";
@@ -23,29 +22,27 @@ import { MULMOSERVER_ORIGIN } from "../../common/firebaseConfig.js";
 import { manifestKey } from "../backends/sharedApp/manifestWrite.js";
 import { serializeBy } from "../backends/sharedApp/serialize.js";
 
-export const SHARED_APP_ACTIONS = ["init", "fork", "check", "preview", "invite", "deploy", "publish", "unpublish"] as const;
+export const SHARED_APP_ACTIONS = ["init", "fork", "check", "preview", "invite", "publish", "unpublish"] as const;
 export type SharedAppAction = (typeof SHARED_APP_ACTIONS)[number];
 
 export const MANAGE_SHARED_APP: ToolDefinition = {
   type: "function",
   name: "manageSharedApp",
   description:
-    "Start, check, run, invite to, deploy, publish or unpublish this repository's shared app (the one declared by its app.json). " +
+    "Start, check, run, invite to, publish or unpublish this repository's shared app (the one declared by its app.json). " +
     "preview loads the app's pages in a real browser, in the same sandbox a visitor gets, and reports what happened. " +
-    "deploy stages the declaration and the collection schemas where only the app's roster can see them; publish promotes what was staged and opens the app to the public; unpublish closes it again.",
+    "publish writes the declaration, the collection schemas and the app's pages; when app.json declares a `public` block it also opens the app to anonymous visitors, and unpublish closes that again.",
   prompt:
     "A request for something OTHER PEOPLE fill in or read — a survey, a sign-up sheet, a booking form, a form behind a link — is a shared app, and the `mulmoterminal-shared-app` skill is the path from that sentence to this tool. Read it before offering a printable page or a third-party form.\n" +
     "`manageSharedApp` operates on the repository the session is open in — the one holding `app.json` — and it is the only way to write a shared app.\n" +
     "**init** writes `app.json` for a repository that has none, with the SIGNED-IN address as its owner — use it instead of composing the file yourself, because the owner has to be the address this machine is signed in with and you cannot read that.\n" +
     "**fork** turns a CLONE of somebody else's shared app into the user's own — a new `aid`, a roster of one, the same collections. It is the answer to \"this repository is a clone, make it mine\", and the ONLY one: `init` refuses a repository that already declares an app, so composing the file by hand or deleting `app.json` first are both worse versions of this. It carries `collections` and `public` over unchanged, never touches `.claude/skills/`, and refuses outright when the signed-in address already owns the app.\n" +
-    "**check** reports everything wrong with the declaration and this repository's shared collections WITHOUT writing or deploying anything. Run it after any edit to `app.json`; it is the only way to find out whether a declaration is deployable before it is deployed.\n" +
-    "**preview** RUNS the pages. It loads each one in a real headless browser, inside the same sandbox and CSP a visitor gets, hands it the app's real records, and presses each control on a freshly loaded copy of the page. It runs to a budget and SAYS what it left out, so read the counts rather than assuming everything was covered. It reports what a person would otherwise have to notice by eye: a page that never finished loading, a button that does nothing, a form the sandbox blocked, a submission the declaration refused. It writes NOTHING — every confirmation is declined — so it cannot tell you whether the deployed rules would accept the write; only the Collections pane, with the user in front of it, answers that. Run it after writing or editing any view, and before deploying one. If it cannot start a browser it says so; then ask the user to press Preview in the Collections pane.\n" +
-    "**invite** adds, changes or removes ONE address on the roster (`email`, `role`, optional `cid`; omit `role` to remove). It takes effect at the next deploy.\n" +
-    "**deploy** is the safe one and is meant to be run often. It writes the roster and internal settings to `apps/{aid}` and each collection's schema to `apps/{aid}/staging/{cid}`, which only people on the roster can read. " +
-    "An invitation added to `members` takes effect at deploy, so the roster can try the real app at `/staging/{aid}` before anybody outside sees it. Deploy never opens the app to the public, and never changes what a published app's visitors are looking at.\n" +
-    "**publish** is the dangerous one. It promotes the STAGED schemas — not the working tree, so what ships is what the roster reviewed — and then opens the app. Publish it only when the user asks for it in those terms.\n" +
-    "**unpublish** closes the app to the public and leaves the promoted schemas in place, so publishing again is a promotion rather than a rebuild.\n" +
-    "Both deploy and publish refuse when live records would not satisfy the schema being written, and list the records. `confirm: true` overrides that refusal — ask the user first, and note that confirming a deploy does NOT carry over to publish: the second refusal is about the same records reaching everyone.",
+    "**check** reports everything wrong with the declaration and this repository's shared collections WITHOUT writing anything. Run it after any edit to `app.json`; it is the only way to find out whether a declaration is publishable before it is published.\n" +
+    "**preview** RUNS the pages. It loads each one in a real headless browser, inside the same sandbox and CSP a visitor gets, hands it the app's real records, and presses each control on a freshly loaded copy of the page. It runs to a budget and SAYS what it left out, so read the counts rather than assuming everything was covered. It reports what a person would otherwise have to notice by eye: a page that never finished loading, a button that does nothing, a form the sandbox blocked, a submission the declaration refused. It writes NOTHING — every confirmation is declined — so it cannot tell you whether the deployed rules would accept the write; only the Collections pane, with the user in front of it, answers that. Run it after writing or editing any view, and again before you publish. If it cannot start a browser it says so; then ask the user to press Preview in the Collections pane.\n" +
+    "**invite** adds, changes or removes ONE address on the roster (`email`, `role`, optional `cid`; omit `role` to remove). It edits app.json only — it takes effect at the next publish.\n" +
+    "**publish** is the dangerous one, and it is the ONLY thing that writes an app after `init`. It writes this repository's declaration, schemas and pages as they are right now, and — when app.json declares `public` — opens the app to anonymous visitors. A declaration with no `public` block publishes to the roster and grants the world nothing. Run `preview` first: nothing else stands between what an LLM wrote and what everybody sees. Publish only when the user asks for it in those terms.\n" +
+    "**unpublish** closes the app to anonymous visitors — the `public` block, the world-readable config and the URL name. The schemas and the roster's own pages are LEFT, so the front desk goes on working at /m/{slug} and publishing again just re-opens the public side.\n" +
+    "publish refuses when live records would not satisfy the schema being written, and lists the records. `confirm: true` overrides that refusal — ask the user first: it means accepting a known breakage for everybody the app is for.",
   parameters: {
     type: "object",
     properties: {
@@ -53,7 +50,7 @@ export const MANAGE_SHARED_APP: ToolDefinition = {
         type: "string",
         enum: [...SHARED_APP_ACTIONS],
         description:
-          "init = write app.json for a new app; fork = take over a clone of somebody else's app; check = report what is wrong without writing; preview = run the pages in a real browser and report what happened; invite = one roster entry; deploy = stage for the roster; publish = promote the staged version and open it; unpublish = close it again.",
+          "init = write app.json and create the app (it reserves the URL name too); fork = take over a clone of somebody else's app; check = report what is wrong without writing; preview = run the pages in a real browser and report what happened; invite = one roster entry; publish = write everything and open it; unpublish = close it again.",
       },
       name: { type: "string", description: "init / fork: the app's human name. fork carries the cloned app's name over when this is omitted." },
       slug: {
@@ -73,7 +70,7 @@ export const MANAGE_SHARED_APP: ToolDefinition = {
       confirm: {
         type: "boolean",
         description:
-          "Write the schema although live records do not satisfy it. Applies to deploy and publish separately — a confirmed deploy still meets publish's own refusal.",
+          "Write the schema although live records do not satisfy it. It is publish's only override, and it accepts the breakage for everybody the app is for.",
       },
     },
     required: ["action"],
@@ -154,39 +151,15 @@ export function pageNote(memberPages: readonly string[], participantPages: reado
   return lines;
 }
 
-async function narrateDeploy(root: string, confirm: boolean): Promise<string> {
-  const result = await deploySharedApp(root, { confirm });
-  if (!result.ok) return result.problems.join("\n");
-  const plural = result.cids.length === 1 ? "" : "s";
-  return [
-    `${result.created ? "Created" : "Updated"} apps/${result.aid} and staged ${result.cids.length} collection${plural}: ${result.cids.join(", ") || "(none)"}.`,
-    `The roster can try it at ${MULMOSERVER_ORIGIN}/staging/${result.aid}. Nothing is public until you publish.`,
-    ...(result.slug === undefined
-      ? []
-      : [
-          `URL name held: '${result.slug}'. It starts resolving at ${MULMOSERVER_ORIGIN}/a/${result.slug} when you publish — until then nobody can look it up, which is what keeps /staging/{aid} unguessable.`,
-        ]),
-    ...(result.pages.length > 0
-      ? [
-          `Staged ${result.pages.length} page${result.pages.length === 1 ? "" : "s"}: ${result.pages.join(", ")}. Try them from ${MULMOSERVER_ORIGIN}/staging/${result.aid} before publishing.`,
-        ]
-      : []),
-    ...(result.withdrawn.length > 0 ? [`Withdrawn from staging (no longer in this repository): ${result.withdrawn.join(", ")}.`] : []),
-    ...warningNote(result.warnings),
-    ...recordNote(result.recordIssues, result.recordIssuesCapped),
-    provenance(result.commit, result.dirty),
-  ].join("\n");
-}
-
 async function narratePublish(root: string, confirm: boolean): Promise<string> {
   const result = await publishSharedApp(root, { confirm });
   if (!result.ok) return result.problems.join("\n");
   const plural = result.cids.length === 1 ? "" : "s";
   return [
-    `Published apps/${result.aid}: promoted ${result.cids.length} staged collection${plural} (${result.cids.join(", ")}).`,
+    `Published apps/${result.aid}: wrote ${result.cids.length} collection${plural} (${result.cids.join(", ")}).`,
     result.publicOpen
       ? `The app is now OPEN to anonymous visitors${at(result.slug)}.`
-      : "The app is NOT open to anonymous visitors — app.json declares no `public` block, so the promoted schemas are readable only by the roster.",
+      : "The app is NOT open to anonymous visitors — app.json declares no `public` block, so the schemas are readable only by the roster.",
     ...pageNote(result.memberPages, result.participantPages, result.slug),
     ...warningNote(result.warnings),
     ...recordNote(result.recordIssues, result.recordIssuesCapped),
@@ -209,8 +182,12 @@ async function narrateInit(root: string, body: Record<string, unknown>): Promise
   return [
     `Started an app in this repository: app.json now declares it, with ${result.owner} as owner.`,
     "The `aid` was generated — it is the app's identity and is never chosen or edited by hand.",
-    ...(result.slug === undefined ? [] : [`The wanted URL name is '${result.slug}'; deploy reserves it, and a taken one gets a number appended.`]),
-    "Next: write the collections, then deploy.",
+    ...(result.slug === undefined
+      ? []
+      : [
+          `The URL name '${result.slug}' is reserved for this app (a taken one gets a number appended). It resolves for the roster now, and for everybody when you publish.`,
+        ]),
+    "Next: write the collections, then preview, then publish.",
   ].join("\n");
 }
 
@@ -229,13 +206,14 @@ async function narrateFork(root: string, body: Record<string, unknown>): Promise
     carried,
     "The collection schemas under `.claude/skills/` were not touched — they are what was cloned, and they are the point.",
     ...urlName(result.slug, result.previousSlug),
-    "Nothing is deployed: the app this was cloned from is untouched, and its records stay where they are. Next: deploy.",
+    "Nothing is published: the app this was cloned from is untouched, and its records stay where they are. Next: preview, then publish.",
   ].join("\n");
 }
 
 /** What to say about the URL name a fork has, or the one it deliberately does not have. */
 function urlName(slug: string | undefined, previous: string | undefined): string[] {
-  if (slug !== undefined) return [`The wanted URL name is '${slug}'; deploy reserves it, and a taken one gets a number appended.`];
+  if (slug !== undefined)
+    return [`The URL name '${slug}' is reserved for this app (a taken one gets a number appended). It resolves for everybody when you publish.`];
   if (previous === undefined) return [];
   return [
     `No URL name: '${previous}' belongs to the app this was cloned from and was deliberately not carried — kept, it would have come back as '${previous}-2'. Ask the user what to call theirs and put it in \`slug\`.`,
@@ -252,14 +230,14 @@ async function narrateCheck(root: string): Promise<string> {
   const report = await checkSharedApp(root);
   if (!report.ok) return report.problems.join("\n");
   const found = report.collections.length === 0 ? "no shared collections in this repository yet" : `shared collections: ${report.collections.join(", ")}`;
-  // WHOSE deploy was checked, always said out loud: signed in it is you, signed out it is the
-  // owner the declaration names, and "it would deploy for somebody else" is not the same answer.
+  // WHOSE publish was checked, always said out loud: signed in it is you, signed out it is the
+  // owner the declaration names, and "it would publish for somebody else" is not the same answer.
   const as =
     report.checkedAs === null
       ? `Checked as the declared owner (${report.declaredOwner ?? "none named"}) — not signed in, so it could not be checked against your address.`
       : `Checked as ${report.checkedAs}.`;
   if (report.problems.length === 0) {
-    return [`The declaration is deployable. ${found}.`, ...warningNote(report.warnings), as, "Nothing was written or deployed — this only reads."].join("\n");
+    return [`The declaration is publishable. ${found}.`, ...warningNote(report.warnings), as, "Nothing was written — this only reads."].join("\n");
   }
   return [
     `The declaration would be refused (${found}):`,
@@ -280,7 +258,7 @@ async function narrateInvite(root: string, body: Record<string, unknown>): Promi
   if (!result.ok) return result.problems.join("\n");
   const where = cid === "*" ? "the whole app" : `'${cid}'`;
   const what = role === null ? `Removed ${email} from ${where}.` : `${email} is now ${role} of ${where}.`;
-  return [what, "It takes effect at the next deploy — nothing has changed in the app yet."].join("\n");
+  return [what, "It takes effect at the next publish — nothing has changed in the app yet."].join("\n");
 }
 
 const str = (value: unknown): string | undefined => (typeof value === "string" && value.length > 0 ? value : undefined);
@@ -301,9 +279,9 @@ export async function manageSharedApp(root: string, args: unknown): Promise<stri
   const confirm = body.confirm === true;
   // ONE operation at a time per repository. Each of these is a read-then-write sequence over the
   // same documents, and interleaved they undo each other: a publish that read the app document
-  // before a deploy renamed the URL would go on to open the OLD name, which the deploy had just
-  // retired — leaving a resolving name that no later unpublish touches, because unpublish works
-  // from the record the deploy moved.
+  // before an `init` (or another publish) renamed the URL would go on to open the OLD name, which
+  // the other run had just retired — leaving a resolving name that no later unpublish touches,
+  // because unpublish works from the record the rename moved.
   //
   // At the entry point rather than inside each operation, because what must not interleave is the
   // whole sequence, and this is the only place they all pass through.
@@ -313,7 +291,6 @@ export async function manageSharedApp(root: string, args: unknown): Promise<stri
   if (action === "check") return serializeBy(key, () => narrateCheck(root));
   if (action === "preview") return serializeBy(key, () => narratePreview(root));
   if (action === "invite") return serializeBy(key, () => narrateInvite(root, body));
-  if (action === "deploy") return serializeBy(key, () => narrateDeploy(root, confirm));
   if (action === "publish") return serializeBy(key, () => narratePublish(root, confirm));
   return serializeBy(key, () => narrateUnpublish(root));
 }

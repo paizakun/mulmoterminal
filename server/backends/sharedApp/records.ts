@@ -60,11 +60,11 @@ export async function scanRecords(collections: readonly LoadedCollection[], work
  *
  *  `what` names the boundary in both messages, because the two differ in what confirming COSTS:
  *  a confirmed deploy is visible to the roster, a confirmed publish to everyone. */
-export function recordRefusal(scan: RecordScan, what: "deploy" | "publish", confirm: boolean | undefined): string[] | null {
+export function recordRefusal(scan: RecordScan, confirm: boolean | undefined): string[] | null {
   if (scan.unreadable.length > 0) {
     return [
       ...scan.unreadable,
-      `${what} stopped: the live records could not be read, so nothing checked whether the schemas about to be written still fit them. ` +
+      "publish stopped: the live records could not be read, so nothing checked whether the schemas about to be written still fit them. " +
         "This is not something `confirm` overrides — confirming means accepting a known breakage, and here there is no reading at all. " +
         "Fix the access (or the connection) and try again.",
     ];
@@ -72,9 +72,7 @@ export function recordRefusal(scan: RecordScan, what: "deploy" | "publish", conf
   if (scan.records === 0 || confirm === true) return null;
   return [
     ...scan.lines,
-    what === "deploy"
-      ? "deploy stopped: these records are live and the roster is reading them. Migrate them first, or re-run with confirm to stage the schema anyway and repair the records afterwards."
-      : "publish stopped: this is the version about to become public, and these records do not fit it. " +
-        "A confirm given to deploy is deliberately not inherited here — re-run publish with confirm to accept the breakage for everyone, or migrate the records first.",
+    "publish stopped: this is the version about to become public, and these records do not fit it. " +
+      "Migrate the records first, or re-run publish with confirm to accept the breakage for everyone.",
   ];
 }

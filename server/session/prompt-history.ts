@@ -117,6 +117,15 @@ export const claudePromptScan = (sessionIds: readonly string[], limit: number = 
   found: [],
 });
 
+/** A scan a caller may fold into without disturbing the one it came from.
+ *
+ *  A memoised scan is shared: two overlapping reads of the same session (two tabs, or a refresh
+ *  racing another) both resume from it, and folding into one array from two interleaved streams
+ *  double-counts every appended prompt and evicts good ones from the window (Codex, #1750).
+ *  `wanted`/`since`/`limit` are not copied because nothing mutates them — a scan whose question
+ *  changed is discarded rather than edited (see memoKeyFor). */
+export const copyClaudePromptScan = (scan: ClaudePromptScan): ClaudePromptScan => ({ ...scan, found: [...scan.found] });
+
 /** Fold one history record into the scan. The rule lives here and the array reader below goes
  *  through the same one, so a streamed read and an array read cannot answer differently. */
 export function foldClaudePrompt(scan: ClaudePromptScan, record: Record<string, unknown>): void {

@@ -8,7 +8,8 @@
 // own module: the dependency runs one way. One of them also WRITES — collectPendingSessions
 // drops a session from knownSessions once disk has it — so "reads" describes the direction
 // of the data, not a guarantee of purity.
-import { existsSync, readdirSync } from "node:fs";
+import fsSync, { existsSync, readdirSync } from "node:fs";
+import type { FileHandle } from "node:fs/promises";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -41,6 +42,7 @@ import { claudeHistoryFile, projectSessionsDir } from "./project-dir.js";
 import {
   claudePromptScan,
   codexPromptScan,
+  copyClaudePromptScan,
   foldClaudePrompt,
   foldCodexPrompt,
   historyIdsFor,
@@ -49,6 +51,7 @@ import {
   PROMPT_SCAN_LIMIT,
 } from "./prompt-history.js";
 import type { PromptWindow } from "../../common/promptHistory.js";
+import { anchorOf, memoKeyFor, resumePlan, ANCHOR_BYTES, EMPTY_ANCHOR, type HistoryMemo } from "./prompt-history-memo.js";
 import { clearedAtOf, clearedClaudeIdOf, clearedTranscripts } from "./cleared-transcripts.js";
 import { currentTurnReplyFromClaudeParsed, lastTurnFromClaudeParsed, lastTurnFromCodexRolloutDocs, EMPTY_TURN, type LastTurn } from "./last-turn.js";
 import { forEachJsonlRecord, forEachJsonlRecordIn, readTailRecords } from "../infra/jsonl-file.js";
@@ -332,18 +335,107 @@ function claudeTranscriptPrompts(cwd: string, id: string): SessionPrompts {
 // machine before the fix: 254 sessions had prompts on disk that the pane showed as 0, the worst of
 // them 848 prompts (reported by the owner, who opened the pane and saw nothing).
 //
-// The cost is the file's LENGTH, not its content: forEachJsonlRecord never materialises it and the
-// scan keeps a sliding window of PROMPT_SCAN_LIMIT entries. 7.8 MB here, read only while a pane is
-// open and at most once per 400ms debounce.
+// The cost is the file's LENGTH, not its content: the reader never materialises it and the scan
+// keeps a sliding window of PROMPT_SCAN_LIMIT entries.
+//
+// RESUMED across reads, because the file is append-only (#1750): the first read of a session walks
+// the whole 7.8 MB, and every read after it folds only the bytes written since. An open pane
+// refreshes on every prompt submitted, so that steady state is what the user actually pays.
+// prompt-history-memo.ts decides when a memo may be believed; here it is only stored and used.
+const historyMemos = new Map<string, HistoryMemo>(); // our session id -> its last scan
+
+export function forgetHistoryMemo(id: string): void {
+  historyMemos.delete(id);
+}
+
+/** The fingerprint of the bytes ending at `offset`, or null when the file cannot supply them.
+ *
+ *  Null is the answer for a file shorter than the offset — truncated, rotated, or replaced by a
+ *  smaller one — and for one that cannot be read at all. `offset === 0` has no bytes before it and
+ *  needs no proof. */
+/** The anchor at a byte offset of an OPEN file — see anchorOf for what the two windows are.
+ *
+ *  Takes the handle rather than the path, and every read of one scan goes through the same one. A
+ *  path is re-resolved per read, so the fold and the anchor stored beside its window could describe
+ *  two different files: the window from the one that was there for the fold, the anchor from
+ *  whatever the path pointed at a millisecond later. That memo then passes its own check on every
+ *  later read, so it is a poisoned cache rather than one wrong answer, and no amount of re-reading
+ *  the path can tell — a replacement built to keep the first bytes intact is identical to the
+ *  original from the outside (CodeRabbit, #1750). A handle IS the file it opened. */
+async function anchorAt(handle: FileHandle, offset: number): Promise<string | null> {
+  if (offset === 0) return EMPTY_ANCHOR;
+  const readAt = async (from: number, want: number): Promise<Buffer | null> => {
+    const buf = Buffer.alloc(want);
+    const { bytesRead } = await handle.read(buf, 0, want, from);
+    return bytesRead === want ? buf : null;
+  };
+  // The head is capped by the offset itself: a resume point inside the first ANCHOR_BYTES makes
+  // the two windows overlap, which costs nothing and stays correct.
+  const head = await readAt(0, Math.min(ANCHOR_BYTES, offset));
+  const tailFrom = Math.max(0, offset - ANCHOR_BYTES);
+  const tail = await readAt(tailFrom, offset - tailFrom);
+  return head && tail ? anchorOf(head, tail) : null;
+}
+
+/** One attempt: plan from the memo, fold the range, and confirm the file did not change underneath.
+ *
+ *  Null means it DID, and the caller retries once from scratch. What "the file" means here is the
+ *  handle opened on the first line: the plan, the fold and the stored anchor all read through it, so
+ *  they cannot disagree about which file they saw however the PATH moves while they run. What is
+ *  left is a file mutated in place under that handle — the fold's bytes and the anchor's would then
+ *  differ, which the re-check below turns into a discard rather than a memo. */
+async function scanHistoryOnce(id: string, ids: readonly string[], since: number | undefined, key: string, memo: HistoryMemo | undefined) {
+  const handle = await fsSync.promises.open(claudeHistoryFile(), "r");
+  try {
+    const now = Date.now();
+    const plan = resumePlan(memo, key, memo ? await anchorAt(handle, memo.offset) : null, now);
+    // What the fold is about to consume, pinned at a byte it will pass: the resume point when there
+    // is one, and otherwise the end as it stands right now. Re-read after the fold, it is what says
+    // the file was not rewritten UNDER the handle while the fold ran — the one thing holding it open
+    // cannot answer by itself. A fresh scan needs its own, since it has no memo anchor to re-check
+    // and would otherwise store a window from before the rewrite beside an anchor from after it
+    // (CodeRabbit, #1750).
+    const checkpoint = plan.reuse ? plan.from : (await handle.stat()).size;
+    const startedOn = plan.reuse && memo ? memo.anchor : await anchorAt(handle, checkpoint);
+    // COPIED, never folded into in place: the memo is shared, so two overlapping reads of this
+    // session would otherwise interleave into one array and count every appended prompt twice.
+    const scan = plan.reuse ? copyClaudePromptScan(plan.reuse) : claudePromptScan(ids, PROMPT_SCAN_LIMIT, since);
+    // `atLineStart` is what makes a resume safe: the offset came from a previous scan of this same
+    // file, so it IS a line boundary and its record must be folded rather than dropped as a partial.
+    const offset = await forEachJsonlRecordIn(handle, { from: plan.from, atLineStart: true }, (record) => foldClaudePrompt(scan, record));
+    const anchor = await anchorAt(handle, offset);
+    if (anchor === null) return null; // the file lost bytes this very scan consumed
+    // EVERYTHING the memo will hold has now been read, and only then is the checkpoint re-read. That
+    // order is the rule, not a detail: a validation placed before the last of those reads leaves the
+    // gap it was meant to close — the rewrite simply lands after the check and before the anchor,
+    // and the memo pairs a window from before it with an anchor from after (CodeRabbit, #1750). A
+    // rewrite after this line is not a poisoned memo but a stale one, self-consistent about a state
+    // the file has left, which the next read's own check discards.
+    if (startedOn === null || (await anchorAt(handle, checkpoint)) !== startedOn) return null;
+    // The full scan underneath is THIS one when nothing was carried, and otherwise the one the
+    // carried window was built by — a resume extends a chain, it does not restart its clock.
+    const fullScanAt = plan.reuse && memo ? memo.fullScanAt : now;
+    historyMemos.set(id, { key, offset, anchor, scan, fullScanAt });
+    return scan;
+  } finally {
+    await handle.close();
+  }
+}
+
 async function claudePrompts(cwd: string, id: string): Promise<SessionPrompts> {
   // The live mapping first — any hook re-learns it, so it is the fresher of the two. The durable
   // one is what a RESTART leaves standing: without it the pane would know where the boundary is and
   // not which id the conversation past it is filed under, which shows nothing at all (#1749).
   const ids = historyIdsFor(id, claudeSessionIds.get(id) ?? clearedClaudeIdOf(id));
-  const scan = claudePromptScan(ids, PROMPT_SCAN_LIMIT, clearedAtOf(id));
+  const since = clearedAtOf(id);
+  const key = memoKeyFor(ids, since);
   try {
-    await forEachJsonlRecord(claudeHistoryFile(), (record) => foldClaudePrompt(scan, record));
-    if (scan.found.length > 0) return promptWindow(scan.found);
+    // Twice at most. The retry carries NO memo, so it is a full scan of whatever is there now —
+    // the file that replaced the first attempt's. A second replacement inside that window would
+    // discard again, and rather than loop we answer from the transcript: a bounded wrong-free path
+    // beats an unbounded right one on a read that runs behind an open pane.
+    const scan = (await scanHistoryOnce(id, ids, since, key, historyMemos.get(id))) ?? (await scanHistoryOnce(id, ids, since, key, undefined));
+    if (scan && scan.found.length > 0) return promptWindow(scan.found);
   } catch {
     // No history file, or one this could not read — the transcript still knows something.
   }

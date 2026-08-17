@@ -5,7 +5,8 @@
 // the form, and this is the projection that makes it so.
 import { describe, it, expect } from "vitest";
 import { parseAuthoredApp } from "@receptron/sharedapp";
-import { oversizeProblem, publicFormOf, publicInputProblems, schemasOfCollections } from "../../../server/backends/sharedApp/publicForm.js";
+import { oversizeProblem, publicFormOf, publicInputProblems } from "../../../server/backends/sharedApp/publicForm.js";
+import { schemasOf } from "../../../server/backends/sharedApp/context.js";
 
 const schema = {
   title: "Responses",
@@ -21,16 +22,10 @@ const schema = {
   },
 };
 
-// `config` is the STAGED rule configuration — what publish promotes onto the app document and
-// what the rules then check a public create against. The form's `statusField` has to come from
-// here rather than from `app.json`, or an edit between deploy and publish moves one and not the
-// other.
-const stagedResponses = {
-  cid: "responses",
-  doc: { publishedSchema: schema, config: { submitOnly: true, statusField: "status" }, deployedAt: 1, deployedBy: "o@e.com" },
-};
-
-const staged = [stagedResponses];
+// The repository's collection, as publish reads it. `statusField` comes from the manifest beside
+// it — one operation writes both, so there is no version of one to pair with another version of
+// the other. (It used to come from the STAGED document, because publish promoted that.)
+const schemas = [{ cid: "responses", schema }];
 
 const authored = (submit: Record<string, unknown>) => {
   const parsed = parseAuthoredApp(
@@ -51,7 +46,7 @@ const surveySubmit = {
 
 describe("publicFormOf", () => {
   it("gives the page a label, a type and an enum's choices", () => {
-    expect(publicFormOf(authored(surveySubmit), staged)).toEqual({
+    expect(publicFormOf(authored(surveySubmit), schemas)).toEqual({
       responses: {
         fields: {
           name: { label: "お名前", type: "string" },
@@ -70,7 +65,7 @@ describe("publicFormOf", () => {
     // `createFields` is the rules' whitelist for a public create, so a field outside it cannot be
     // submitted — and publishing its label would put the app's internal vocabulary on a
     // world-readable document for nobody's benefit.
-    const form = publicFormOf(authored(surveySubmit), staged);
+    const form = publicFormOf(authored(surveySubmit), schemas);
     expect(Object.keys(form.responses?.fields ?? {})).not.toContain("status");
     expect(Object.keys(form.responses?.fields ?? {})).not.toContain("id");
   });
@@ -85,7 +80,7 @@ describe("publicFormOf", () => {
     };
     const form = publicFormOf(
       authored({ responses: { auth: "verifiedEmail", emailField: "email", createFields: ["name", "score", "comment"], validate: { required: ["score"] } } }),
-      [{ cid: "responses", doc: { publishedSchema: withRequired, deployedAt: 1, deployedBy: "o@e.com" } }],
+      [{ cid: "responses", schema: withRequired }],
     );
     expect(form.responses?.fields.name).toMatchObject({ required: true });
     expect(form.responses?.fields.score).toMatchObject({ required: true });
@@ -98,8 +93,7 @@ describe("publicFormOf", () => {
     // so a collection that calls it `state` refuses a submission that writes `status` — and the
     // visitor cannot learn the name from anywhere else.
     //
-    // Staged and manifest deliberately DISAGREE here: publish promotes the staged copy, so that
-    // is the one the page must be told about.
+    // The manifest is what publish writes, so the manifest is what the page is told about.
     const parsed = parseAuthoredApp(
       JSON.stringify({
         aid: "a1",
@@ -113,22 +107,22 @@ describe("publicFormOf", () => {
       }),
     );
     if (!parsed.ok) throw new Error(parsed.problems.join("; "));
-    expect(publicFormOf(parsed.app, staged).responses?.statusField).toBe("status");
+    expect(publicFormOf(parsed.app, schemas).responses?.statusField).toBe("state");
   });
 
   it("says nothing about a collection the app does not open", () => {
-    expect(publicFormOf(authored({}), staged)).toEqual({});
+    expect(publicFormOf(authored({}), schemas)).toEqual({});
   });
 
-  it("skips a submit whose collection is not staged, rather than publishing an empty form", () => {
+  it("skips a submit whose collection this repository does not have, rather than publishing an empty form", () => {
     // An empty entry reads as a form that failed to load; absence is a fact the page can state.
-    expect(publicFormOf(authored({ waitlist: { auth: "verifiedEmail", emailField: "email", createFields: ["name"] } }), staged)).toEqual({});
+    expect(publicFormOf(authored({ waitlist: { auth: "verifiedEmail", emailField: "email", createFields: ["name"] } }), schemas)).toEqual({});
   });
 
   it("ignores a createFields entry the schema does not declare", () => {
     // Including `toString`: an own-property guard is what keeps an Object.prototype member from
     // being published as a field nobody wrote.
-    const form = publicFormOf(authored({ responses: { auth: "verifiedEmail", emailField: "email", createFields: ["name", "toString", "nope"] } }), staged);
+    const form = publicFormOf(authored({ responses: { auth: "verifiedEmail", emailField: "email", createFields: ["name", "toString", "nope"] } }), schemas);
     expect(form.responses?.fields).toEqual({ name: { label: "お名前", type: "string" } });
   });
 });
@@ -143,11 +137,8 @@ describe("the field the page stamps rather than asks", () => {
   });
   const withStamp = [
     {
-      ...stagedResponses,
-      doc: {
-        ...stagedResponses.doc,
-        publishedSchema: { ...schema, fields: { ...schema.fields, createdAt: { type: "datetime" as const, label: "受付日時" } } },
-      },
+      cid: "responses",
+      schema: { ...schema, fields: { ...schema.fields, createdAt: { type: "datetime" as const, label: "受付日時" } } },
     },
   ];
 
@@ -167,20 +158,19 @@ describe("the field the page stamps rather than asks", () => {
       responses: { auth: "verifiedEmail", idFrom: "auth.uid", createFields: ["createdAt"], stampField: "createdAt" },
     });
     const form = publicFormOf(oneClick, withStamp);
-    // `statusField` rides along as it does for any collection whose staged
-    // configuration names one — the page needs it whether or not it draws
-    // anything.
+    // `statusField` rides along as it does for any collection whose declaration names one — the
+    // page needs it whether or not it draws anything.
     expect(form.responses).toEqual({ fields: {}, stampField: "createdAt", statusField: "status" });
   });
 
   it("still drops a collection that draws nothing and stamps nothing", () => {
     // The guard this sits beside is not weakened: an empty entry with nothing
     // behind it reads as a form that failed to load.
-    expect(publicFormOf(authored({ responses: { auth: "verifiedEmail", createFields: ["nope"] } }), staged).responses).toBeUndefined();
+    expect(publicFormOf(authored({ responses: { auth: "verifiedEmail", createFields: ["nope"] } }), schemas).responses).toBeUndefined();
   });
 
   it("is absent when nothing is stamped", () => {
-    expect(publicFormOf(authored(surveySubmit), staged).responses?.stampField).toBeUndefined();
+    expect(publicFormOf(authored(surveySubmit), schemas).responses?.stampField).toBeUndefined();
   });
 });
 
@@ -188,9 +178,7 @@ describe("fields a stranger cannot be asked for", () => {
   // `createFields` is not only what the page draws from — it is the whitelist the deployed rules
   // judge a public create by. So a computed field left in it is a value from the internet landing
   // in a field the host is supposed to compute; dropping it from the form alone would not stop it.
-  const withField = (name: string, spec: Record<string, unknown>) => [
-    { ...stagedResponses, doc: { ...stagedResponses.doc, publishedSchema: { ...schema, fields: { ...schema.fields, [name]: spec } } } },
-  ];
+  const withField = (name: string, spec: Record<string, unknown>) => [{ cid: "responses", schema: { ...schema, fields: { ...schema.fields, [name]: spec } } }];
 
   it("does not draw a computed field", () => {
     const app = authored({ responses: { auth: "verifiedEmail", emailField: "email", createFields: ["name", "flagged"] } });
@@ -207,7 +195,7 @@ describe("fields a stranger cannot be asked for", () => {
 
 describe("oversizeProblem", () => {
   it("says nothing about a form that fits", () => {
-    expect(oversizeProblem({ form: publicFormOf(authored(surveySubmit), staged) })).toBeNull();
+    expect(oversizeProblem({ form: publicFormOf(authored(surveySubmit), schemas) })).toBeNull();
   });
 
   it("stops a form too big for the one document a visitor may read", () => {
@@ -221,7 +209,7 @@ describe("publicInputProblems", () => {
   // The gate that runs before any write — `declarationProblems`, shared by deploy, publish and
   // check — so the author is told while it is still a declaration.
   const collection = (fields: Record<string, unknown>) =>
-    schemasOfCollections([{ slug: "responses", schema: { ...schema, fields: { ...schema.fields, ...fields } } } as never]);
+    schemasOf([{ slug: "responses", schema: { ...schema, fields: { ...schema.fields, ...fields } } } as never]);
 
   it("says nothing about a form of plain fields", () => {
     expect(publicInputProblems(authored(surveySubmit), collection({}))).toEqual([]);
@@ -248,43 +236,43 @@ describe("publicInputProblems", () => {
 });
 
 describe("the status field the page writes", () => {
-  // publish promotes `collections[cid]` from `staging/{cid}` so a manifest edit after deploy
-  // cannot change the rule behaviour being published. The form has to read the same staged copy:
-  // otherwise deploy with `state`, edit `app.json` to `status`, publish — and the page writes a
-  // key the promoted rule refuses, with nothing on the page to say why.
-  it("comes from what was staged, not from app.json", () => {
+  // The rules check `collections[cid].statusField` on the app document, and publish writes that
+  // from the manifest in the same operation as this form — so the two cannot disagree. They could
+  // when publish promoted a STAGED copy: deploy with `state`, edit `app.json` to `status`,
+  // publish, and the page wrote a key the promoted rule refused with nothing to say why.
+  it("comes from the manifest publish writes beside it", () => {
     const app = authored(surveySubmit);
-    const restaged = [{ ...stagedResponses, doc: { ...stagedResponses.doc, config: { submitOnly: true, statusField: "state" } } }];
-    expect(publicFormOf(app, restaged).responses?.statusField).toBe("state");
+    expect(publicFormOf(app, schemas).responses?.statusField).toBe("status");
   });
 
-  it("is absent when the staged configuration names none", () => {
-    const restaged = [{ ...stagedResponses, doc: { ...stagedResponses.doc, config: { submitOnly: true } } }];
-    expect(publicFormOf(authored(surveySubmit), restaged).responses?.statusField).toBeUndefined();
+  it("is absent when the declaration names none", () => {
+    const parsed = parseAuthoredApp(
+      JSON.stringify({
+        aid: "a1",
+        members: { "o@e.com": { "*": "owner" } },
+        collections: { responses: { submitOnly: true } },
+        public: { enabled: true, read: [], submit: surveySubmit },
+      }),
+    );
+    if (!parsed.ok) throw new Error(parsed.problems.join("; "));
+    expect(publicFormOf(parsed.app, schemas).responses?.statusField).toBeUndefined();
   });
 });
 
-describe("a declaration that has moved on since the deploy", () => {
-  // The deploy gate reads the working tree; publish promotes the STAGED schemas. Add a field to
-  // both the schema and `createFields` without deploying again, and the rules being published
-  // would demand a field the published form cannot draw — a visitor filling the form in correctly
-  // is refused, with nothing to fix.
+describe("a createFields entry the schema does not declare", () => {
+  // It used to be asked twice: the deploy gate read the working tree, publish read the STAGED
+  // schemas, and a field added to both the schema and `createFields` without a re-deploy would
+  // publish rules demanding a field the form could not draw. One version now, one answer.
   const app = authored({ responses: { auth: "verifiedEmail", emailField: "email", createFields: ["name", "referrer"] } });
 
-  it("passes against the tree that has the field", () => {
+  it("passes against a schema that has the field", () => {
     const withNew = { ...schema, fields: { ...schema.fields, referrer: { type: "string" as const, label: "きっかけ" } } };
     expect(publicInputProblems(app, [{ cid: "responses", schema: withNew }])).toEqual([]);
   });
 
-  it("is refused against the staged version that does not, and says to deploy again", () => {
-    const problems = publicInputProblems(app, [{ cid: "responses", schema }], "staged");
-    expect(problems).toHaveLength(1);
-    expect(problems[0]).toContain("'referrer'");
-    expect(problems[0]).toContain("Run deploy again");
-  });
-
-  it("calls an undeclared name a name, against the tree", () => {
+  it("is refused against one that does not", () => {
     const problems = publicInputProblems(app, [{ cid: "responses", schema }]);
+    expect(problems).toHaveLength(1);
     expect(problems[0]).toContain("does not declare a field called 'referrer'");
   });
 });

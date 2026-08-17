@@ -1,19 +1,22 @@
 // @vitest-environment node
 //
-// The three shared-app operations, exercised end to end against an in-memory Firestore.
+// The shared-app operations, exercised end to end against an in-memory Firestore.
 //
 // What is pinned here is ORDER and OWNERSHIP, because those are what MulmoTerminal added and what
-// nothing else checks. The projections are core's and are tested there; the failure this file
-// exists to catch is a write landing in the wrong sequence — `apps/{aid}.public` is what the
-// deployed rules read to authorize anonymous access, so a deploy that wrote it would open an app
-// somebody was only testing, and a publish that wrote it FIRST would leave anonymous access live
-// against a half-published surface if the next write failed.
+// nothing else checks. The projections are the publisher's and are tested there; the failure this
+// file exists to catch is a write landing in the wrong sequence — `apps/{aid}.public` is what the
+// deployed rules read to authorize anonymous access, so a publish that wrote it FIRST would leave
+// anonymous access live against a half-published surface if the next write failed.
+//
+// There is no `deploy` any more, and no `apps/{aid}/staging`: an app EXISTS (init writes the app
+// document and reserves the URL name) or it is PUBLISHED (publish writes everything else and opens
+// it). The tests that pinned the two-stage promotion went with the code they described —
+// `plans/feat-shared-app-no-staging.md` records which and why.
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { setFirestoreAccessor, setSharedCollectionsSupport, type FirestoreDocs, type FirestoreDoc } from "@mulmoclaude/core/collection/server";
 import { initCollectionsBackend } from "../../../server/backends/collections.js";
-import { deploySharedApp } from "../../../server/backends/sharedApp/deploy.js";
 import { publishSharedApp } from "../../../server/backends/sharedApp/publish.js";
 import { unpublishSharedApp } from "../../../server/backends/sharedApp/unpublish.js";
 import { makeTempDir } from "../../support/tempDir";
@@ -149,7 +152,7 @@ const stamp = { now: () => 1_700_000_000_000, resolveCommit: () => Promise.resol
 
 let root = "";
 
-describe("shared app deploy / publish / unpublish", () => {
+describe("shared app publish / unpublish", () => {
   beforeAll(() => {
     // ONE binding per file — `configureCollectionHost` refuses a second call with a different host.
     initCollectionsBackend({ workspace: makeTempDir("mt-shared-app-ws-") });
@@ -164,93 +167,102 @@ describe("shared app deploy / publish / unpublish", () => {
     writeCollection(root, "bookings");
   });
 
-  // `init` now reserves `apps/{aid}` before it writes `app.json`, so the document exists from the
-  // moment the app is declared. "Created" has to keep meaning "this deploy is the first" rather
-  // than "the document was absent", or the very first deploy of every new app reports an update.
-  it("still reports the first deploy as created when init already reserved the app", async () => {
-    docs.store.set("apps", new Map([[AID, { owner: OWNER.uid, members: { [OWNER.email]: { "*": "owner" } }, memberEmails: [OWNER.email] }]]));
+  it("writes the schemas, the app document and the authorization — in that order", async () => {
+    writeApp(root, declaration({ public: { enabled: true, read: ["bookings"] } }));
 
-    const first = await deploySharedApp(root, stamp);
-    expect(first.ok).toBe(true);
-    expect(first.ok && first.created).toBe(true);
-
-    // And the deploy after it is an update, because that one really is.
-    const second = await deploySharedApp(root, stamp);
-    expect(second.ok && second.created).toBe(false);
-  });
-
-  it("deploys to the roster only — no public block, no published schema, no public config", async () => {
-    const result = await deploySharedApp(root, stamp);
+    const result = await publishSharedApp(root, stamp);
     expect(result.ok === false ? result.problems : []).toEqual([]);
-    expect(result.ok).toBe(true);
-    // The one that matters: `publicOn` reads THIS field, not the world-readable projection, so a
-    // deploy that wrote it would open the app for anyone testing.
-    expect(docs.app()).not.toHaveProperty("public");
+    expect(result.ok === true && result.publicOpen).toBe(true);
+    // The app document goes in FIRST here because this publish created it: the records are
+    // authorized through it, so the migration gate cannot read them until it exists. Then the
+    // data, and the authorization at the very end.
+    //
+    // The `delete` is unconditional and that is the point: `config/{docId}` is world-readable
+    // forever, so a view withdrawn from the declaration and merely not rewritten stays fetchable.
+    // An app that never had one pays one idempotent delete for the guarantee.
+    expect(docs.writes).toEqual([
+      `set apps/${AID}`,
+      `set apps/${AID}/collections/bookings`,
+      `set apps/${AID}/config/public`,
+      `delete apps/${AID}/config/view`,
+      `set apps/${AID}`,
+    ]);
+    expect(docs.doc(`apps/${AID}/collections`, "bookings")).toMatchObject({ publishedBy: OWNER.email, publishedCommit: "c0ffee" });
+    expect(docs.app()?.public).toMatchObject({ enabled: true });
     expect(docs.app()?.memberEmails).toEqual([OWNER.email]);
-    expect(docs.doc(`apps/${AID}/staging`, "bookings")).toMatchObject({ deployedBy: OWNER.email, deployedCommit: "c0ffee" });
-    // The two documents the public page reads. Deploy must leave a LIVE app looking exactly as it did.
-    expect(docs.store.get(`apps/${AID}/collections`)).toBeUndefined();
-    expect(docs.store.get(`apps/${AID}/config`)).toBeUndefined();
   });
 
-  it("creates an app whose records cannot be read yet — the first deploy of all", async () => {
+  it("writes nothing public when the declaration opens nothing", async () => {
+    const result = await publishSharedApp(root, stamp);
+    expect(result.ok === true && result.publicOpen).toBe(false);
+    // `publicOn` reads THIS field, not the world-readable projection.
+    expect(docs.app()).not.toHaveProperty("public");
+    // The schema is written all the same: the roster reads it at `/m/{slug}`, which is what a
+    // roster-only app is for.
+    expect(docs.doc(`apps/${AID}/collections`, "bookings")).toBeDefined();
+  });
+
+  it("creates an app whose records cannot be read yet — the first publish of all", async () => {
     // The deadlock this pins: a shared collection's records are authorized THROUGH `apps/{aid}`,
     // so before that document exists the records cannot be read at all. The migration gate read
     // that as "the live records could not be read", which is the one refusal `confirm` may not
     // override — and a new app could never be created.
     docs.readsDeniedUntilApp = true;
 
-    const result = await deploySharedApp(root, stamp);
-    expect(result.ok).toBe(true);
+    const result = await publishSharedApp(root, stamp);
+    expect(result.ok === false ? result.problems : []).toEqual([]);
     expect(docs.app()).toBeDefined();
-    expect(docs.doc(`apps/${AID}/staging`, "bookings")).toBeDefined();
+    expect(docs.doc(`apps/${AID}/collections`, "bookings")).toBeDefined();
   });
 
   it("runs the migration gate on records that survived their app document", async () => {
     // Firestore deletes do not cascade: `apps/{aid}` can be gone while the records under it
     // survive. A missing app document therefore proves only that the records cannot be READ right
-    // now — not that they do not exist — and a deploy that re-creates the app must still check
-    // them, or it hands them to the roster under a schema nothing compared them against.
+    // now — not that they do not exist — and a publish that re-creates the app must still check
+    // them, or it hands them to everybody under a schema nothing compared them against.
     docs.store.set(`apps/${AID}/collections/bookings/items`, new Map([["1", { id: "1" }]]));
     writeFileSync(
       path.join(root, ".claude", "skills", "bookings", "schema.json"),
       JSON.stringify({ ...schemaFor("bookings"), fields: { ...schemaFor("bookings").fields, note: { type: "string", label: "Note", required: true } } }),
     );
 
-    const result = await deploySharedApp(root, stamp);
+    const result = await publishSharedApp(root, stamp);
     expect(result.ok).toBe(false);
     expect(result.ok === false && result.problems.join("\n")).toContain("would not satisfy the schema");
     // The app document IS live — that is what made the records readable — and the result says so.
     expect(docs.app()).toBeDefined();
     expect(result.ok === false && result.partial).toBe(true);
-    // Nothing was staged: the gate stopped before that.
-    expect(docs.store.get(`apps/${AID}/staging`)).toBeUndefined();
+    // Nothing else was written: the gate stopped before the schemas.
+    expect(docs.store.get(`apps/${AID}/collections`)).toBeUndefined();
   });
 
-  it("withdraws staging that outlived its app document", async () => {
-    // Firestore leaves `staging/*` behind exactly as it leaves the records. Carried through a
-    // resurrecting deploy, an orphaned staged collection then makes publish fail closed — it
-    // promotes what is staged and refuses a cid the repository does not have.
-    docs.store.set(`apps/${AID}/staging`, new Map([["waitlist", { publishedSchema: { title: "Waitlist" }, deployedAt: 1, deployedBy: OWNER.email }]]));
+  it("stops at live records that would not fit, and confirming writes them anyway", async () => {
+    await publishSharedApp(root, stamp);
+    docs.store.set(`apps/${AID}/collections/bookings/items`, new Map([["1", { id: "1" }]]));
+    writeFileSync(
+      path.join(root, ".claude", "skills", "bookings", "schema.json"),
+      JSON.stringify({ ...schemaFor("bookings"), fields: { ...schemaFor("bookings").fields, note: { type: "string", label: "Note", required: true } } }),
+    );
 
-    const result = await deploySharedApp(root, stamp);
-    expect(result.ok === true && result.withdrawn).toEqual(["waitlist"]);
-    expect(docs.doc(`apps/${AID}/staging`, "waitlist")).toBeUndefined();
-    // And the deploy still did its own job.
-    expect(docs.doc(`apps/${AID}/staging`, "bookings")).toBeDefined();
+    const refused = await publishSharedApp(root, stamp);
+    expect(refused.ok).toBe(false);
+    expect(refused.ok === false && refused.problems.join("\n")).toContain("would not satisfy the schema");
+
+    const confirmed = await publishSharedApp(root, { ...stamp, confirm: true });
+    expect(confirmed.ok === true && confirmed.recordIssues).toBe(1);
   });
 
   it("does not mistake a fault for an absent app and rebuild it", async () => {
     // `failed-precondition` is not the rules saying no — it is a missing index, a stale
     // transaction, a client the backend wants restarted. Read as a refusal, the app document looks
-    // ABSENT: the deploy would rebuild it from the declaration alone, dropping the `public` block
-    // and the held slug — silently unpublishing a live app and stranding its URL name.
+    // ABSENT: the publish would rebuild it from the declaration alone, dropping the held slug and
+    // stranding the URL name.
     writeApp(root, declaration({ slug: "sakura-hair", public: { enabled: true, read: ["bookings"] } }));
-    await deploySharedApp(root, stamp);
-    await publishSharedApp(root, stamp);
+    const first = await publishSharedApp(root, stamp);
+    expect(first.ok === false ? first.problems : []).toEqual([]);
     docs.readErrorCode = "failed-precondition";
 
-    const result = await deploySharedApp(root, stamp);
+    const result = await publishSharedApp(root, stamp);
     expect(result.ok).toBe(false);
     // The app is untouched: still public, still holding its name.
     expect(docs.app()?.public).toMatchObject({ enabled: true });
@@ -258,7 +270,7 @@ describe("shared app deploy / publish / unpublish", () => {
   });
 
   it("says whose app it is when the id is taken and unreadable", async () => {
-    // The two are indistinguishable by reading — both are refusals — so the create is what settles
+    // The two are indistinguishable by reading — both are refusals — so the write is what settles
     // it, and the message has to name the situation rather than repeat "insufficient permissions".
     docs.store.set("apps", new Map([[AID, { aid: AID, owner: "somebody-else" }]]));
     docs.readsDeniedForApp = true;
@@ -266,83 +278,25 @@ describe("shared app deploy / publish / unpublish", () => {
     // that refusal is the only signal available, because the document cannot be read.
     docs.failAt = `apps/${AID}`;
 
-    const result = await deploySharedApp(root, stamp);
+    const result = await publishSharedApp(root, stamp);
     expect(result.ok).toBe(false);
     expect(result.ok === false && result.problems.join("\n")).toContain("belongs to somebody else's roster");
-    expect(docs.doc(`apps/${AID}/staging`, "bookings")).toBeUndefined();
+    expect(docs.store.get(`apps/${AID}/collections`)).toBeUndefined();
   });
 
-  it("says the roster is live when it cannot read staging after creating the app", async () => {
-    // "Nothing was written" about an app that now exists is worse than no report at all: the next
-    // decision — deploy again, or go looking for what half-happened — turns on it.
-    docs.failListing = `apps/${AID}/staging`;
-
-    const result = await deploySharedApp(root, stamp);
-    expect(result.ok).toBe(false);
-    expect(result.ok === false && result.partial).toBe(true);
-    expect(result.ok === false && result.problems.join("\n")).toContain("the roster is live");
-    expect(docs.app()).toBeDefined();
-  });
-
-  it("writes the app document before the staged schemas — the staging rules resolve the owner through it", async () => {
-    await deploySharedApp(root, stamp);
-    // The app write, then the staging document. On a first deploy the app write is what makes the
-    // records readable, so it happens before the migration gate rather than beside the staging
-    // writes — and it is a `set`, because create-if-absent is a transaction that reads first and
-    // that read is refused for the very document it would create.
-    expect(docs.writes).toEqual([`set apps/${AID}`, `set apps/${AID}/staging/bookings`]);
-
-    // And on a redeploy, where the app already exists, the same order without the extra write.
-    docs.writes.length = 0;
-    await deploySharedApp(root, stamp);
-    expect(docs.writes).toEqual([`set apps/${AID}`, `set apps/${AID}/staging/bookings`]);
-  });
-
-  it("does not silently unpublish a live app when it is deployed again", async () => {
-    writeApp(root, declaration({ public: { enabled: true, read: ["bookings"] } }));
-    await deploySharedApp(root, stamp);
+  it("publishes the working tree, as it stands", async () => {
+    // It used to publish what a previous deploy had STAGED, so an edit after that deploy stayed
+    // unpublished until the next one. `preview` is what stands between the tree and everybody now.
     await publishSharedApp(root, stamp);
-    expect(docs.app()?.public).toMatchObject({ enabled: true });
+    writeFileSync(path.join(root, ".claude", "skills", "bookings", "schema.json"), JSON.stringify({ ...schemaFor("bookings"), title: "Edited" }));
 
-    // The declaration is replaced, not merged — carrying `public` forward is what keeps a
-    // replacement from revoking the publish.
-    await deploySharedApp(root, stamp);
-    expect(docs.app()?.public).toMatchObject({ enabled: true });
-  });
-
-  it("refuses to publish what was never staged", async () => {
-    const result = await publishSharedApp(root, stamp);
-    expect(result.ok).toBe(false);
-    expect(result.ok === false && result.problems.join(" ")).toContain("nothing is staged");
-    expect(result.ok === false && result.partial).toBe(false);
-  });
-
-  it("promotes the staged version and opens the app LAST", async () => {
-    writeApp(root, declaration({ public: { enabled: true, read: ["bookings"] } }));
-    await deploySharedApp(root, stamp);
-    docs.writes.length = 0;
-
-    const result = await publishSharedApp(root, stamp);
-    expect(result.ok).toBe(true);
-    expect(result.ok === true && result.publicOpen).toBe(true);
-    // Promotion first, the projection next, and the authorization at the very end.
-    // The `delete` is unconditional and that is the point: `config/{docId}` is world-readable
-    // forever, so a view withdrawn from the declaration and merely not rewritten stays fetchable.
-    // An app that never had one pays one idempotent delete for the guarantee.
-    expect(docs.writes).toEqual([
-      `set apps/${AID}/collections/bookings`,
-      `set apps/${AID}/config/public`,
-      `delete apps/${AID}/config/view`,
-      `set apps/${AID}`,
-      `set apps/${AID}`,
-    ]);
-    expect(docs.doc(`apps/${AID}/collections`, "bookings")).toMatchObject({ publishedBy: OWNER.email });
-    expect(docs.app()?.public).toMatchObject({ enabled: true });
+    await publishSharedApp(root, stamp);
+    const published = docs.doc(`apps/${AID}/collections`, "bookings");
+    expect((published?.publishedSchema as { title: string }).title).toBe("Edited");
   });
 
   it("leaves the app PRIVATE when a publish fails part-way", async () => {
     writeApp(root, declaration({ public: { enabled: true, read: ["bookings"] } }));
-    await deploySharedApp(root, stamp);
     docs.failAt = `apps/${AID}/config/public`;
 
     const result = await publishSharedApp(root, stamp);
@@ -353,35 +307,32 @@ describe("shared app deploy / publish / unpublish", () => {
     expect(result.ok === false && result.problems.join("\n")).toContain("Written by this publish, and live now");
   });
 
-  it("publishes the STAGED version, not the working tree", async () => {
-    await deploySharedApp(root, stamp);
-    // The tree moves on after the deploy. Nobody has looked at this through /staging/{aid}.
-    writeFileSync(
-      path.join(root, ".claude", "skills", "bookings", "schema.json"),
-      JSON.stringify({ ...schemaFor("bookings"), title: "Edited after the deploy" }),
+  it("keeps a live app open when it is published again", async () => {
+    writeApp(root, declaration({ public: { enabled: true, read: ["bookings"] } }));
+    await publishSharedApp(root, stamp);
+    expect(docs.app()?.public).toMatchObject({ enabled: true });
+
+    await publishSharedApp(root, stamp);
+    expect(docs.app()?.public).toMatchObject({ enabled: true });
+  });
+
+  it("publishes the form the public page draws from", async () => {
+    // The page cannot read the schema, so the config document — the only one a visitor may read —
+    // carries the labels and the choices. Without it the form is a row of unlabelled boxes.
+    writeApp(
+      root,
+      declaration({
+        collections: { bookings: { submitOnly: true } },
+        public: { enabled: true, read: [], submit: { bookings: { auth: "verifiedEmail", emailField: "note", createFields: ["note"] } } },
+      }),
     );
     await publishSharedApp(root, stamp);
-    const published = docs.doc(`apps/${AID}/collections`, "bookings");
-    expect((published?.publishedSchema as { title: string }).title).toBe("bookings");
+
+    expect(docs.doc(`apps/${AID}/config`, "public")?.form).toEqual({ bookings: { fields: { note: { label: "Note", type: "string" } } } });
   });
 
-  it("withdraws a staged collection the repository no longer has", async () => {
-    writeCollection(root, "waitlist");
-    await deploySharedApp(root, stamp);
-    expect(docs.doc(`apps/${AID}/staging`, "waitlist")).toBeDefined();
-
-    // The directory is gone from the next deploy's point of view (discovery reads the tree).
-    writeFileSync(path.join(root, ".claude", "skills", "waitlist", "schema.json"), "not json at all");
-    const result = await deploySharedApp(root, stamp);
-    expect(result.ok === true && result.withdrawn).toEqual(["waitlist"]);
-    expect(docs.doc(`apps/${AID}/staging`, "waitlist")).toBeUndefined();
-    // A withdrawal grants nothing, so it happens after the writes rather than before them.
-    expect(docs.writes.at(-1)).toBe(`delete apps/${AID}/staging/waitlist`);
-  });
-
-  it("closes the app by removing the authorization first, and keeps the promoted schemas", async () => {
+  it("closes the app by removing the authorization first, and keeps the schemas", async () => {
     writeApp(root, declaration({ public: { enabled: true, read: ["bookings"] } }));
-    await deploySharedApp(root, stamp);
     await publishSharedApp(root, stamp);
     docs.writes.length = 0;
 
@@ -390,108 +341,91 @@ describe("shared app deploy / publish / unpublish", () => {
     // The page comes down with the settings, for the reason the publish above deletes it.
     expect(docs.writes).toEqual([`set apps/${AID}`, `delete apps/${AID}/config/public`, `delete apps/${AID}/config/view`]);
     expect(docs.app()).not.toHaveProperty("public");
-    // Nobody can read them while the app is closed, so they cost nothing — and re-publishing is
-    // then a promotion rather than a rebuild.
+    // The roster goes on using the app while it is closed, so its schemas stay.
     expect(docs.doc(`apps/${AID}/collections`, "bookings")).toBeDefined();
   });
 
-  it("stops at live records that would not fit the new schema, and confirming stages it anyway", async () => {
-    // The app has to EXIST for this gate to run: before it does there are no live records, and the
-    // records cannot even be read — the rules resolve their roster from the app document.
-    await deploySharedApp(root, stamp);
-    docs.store.set(`apps/${AID}/collections/bookings/items`, new Map([["1", { id: "1" }]]));
-    writeFileSync(
-      path.join(root, ".claude", "skills", "bookings", "schema.json"),
-      JSON.stringify({ ...schemaFor("bookings"), fields: { ...schemaFor("bookings").fields, note: { type: "string", label: "Note", required: true } } }),
-    );
+  it("closes an app whose declaration stopped opening it", async () => {
+    // Taking `public` out of app.json and publishing is how an author closes an app without
+    // reaching for `unpublish`, and it has to mean the same thing. The world-readable documents
+    // are the half that is easy to miss: `config/{docId}` is `allow read: if true` forever, so
+    // dropping the authorization while leaving them would keep the previous public page and its
+    // form fetchable by anybody who kept the path.
+    mkdirSync(path.join(root, "views"), { recursive: true });
+    writeFileSync(path.join(root, "views", "form.html"), "<p>book here</p>");
+    const open = { enabled: true, read: ["bookings"], view: { path: "views/form.html", collections: ["bookings"] } };
+    writeApp(root, declaration({ slug: "sakura-hair", public: open }));
+    await publishSharedApp(root, stamp);
+    expect(docs.doc(`apps/${AID}/config`, "public")).toBeDefined();
+    expect(docs.doc(`apps/${AID}/config`, "view")).toBeDefined();
 
-    const refused = await deploySharedApp(root, stamp);
-    expect(refused.ok).toBe(false);
-    expect(refused.ok === false && refused.problems.join("\n")).toContain("would not satisfy the schema");
-
-    const confirmed = await deploySharedApp(root, { ...stamp, confirm: true });
-    expect(confirmed.ok === true && confirmed.recordIssues).toBe(1);
-  });
-
-  it("refuses to publish a staging set that is missing a collection the repository has", async () => {
-    // Not the same question as "is staging empty". A deploy writes the staged documents one at a
-    // time, so one that failed part-way leaves a NONEMPTY but incomplete set — and publishing it
-    // opens an app whose declaration names a collection with no schema behind it.
-    await deploySharedApp(root, stamp);
-    writeCollection(root, "waitlist");
-
-    const result = await publishSharedApp(root, stamp);
-    expect(result.ok).toBe(false);
-    expect(result.ok === false && result.problems.join("\n")).toContain("waitlist");
-    expect(docs.store.get(`apps/${AID}/collections`)).toBeUndefined();
-
-    // Deploying is the fix, and it is the same fix for the ordinary version of this: a collection
-    // added to the repository and never deployed.
-    await deploySharedApp(root, stamp);
-    expect((await publishSharedApp(root, stamp)).ok).toBe(true);
-  });
-
-  it("does not let a confirmed deploy buy the publish", async () => {
-    // Same reason as above: the gate needs an app to exist before there is anything live in it.
-    await deploySharedApp(root, stamp);
-    // The reason the scan runs at BOTH boundaries: deploy's confirm says "let me stage this
-    // anyway", which mid-migration is the useful thing. It is not the same sentence as "let
-    // everyone have it", so publish asks again and needs its own confirm.
-    docs.store.set(`apps/${AID}/collections/bookings/items`, new Map([["1", { id: "1" }]]));
-    writeFileSync(
-      path.join(root, ".claude", "skills", "bookings", "schema.json"),
-      JSON.stringify({ ...schemaFor("bookings"), fields: { ...schemaFor("bookings").fields, note: { type: "string", label: "Note", required: true } } }),
-    );
-    await deploySharedApp(root, { ...stamp, confirm: true });
-
-    const refused = await publishSharedApp(root, stamp);
-    expect(refused.ok).toBe(false);
-    expect(refused.ok === false && refused.problems.join("\n")).toContain("not inherited");
-    expect(docs.store.get(`apps/${AID}/collections`)?.get("bookings")).toBeUndefined();
-
-    const confirmed = await publishSharedApp(root, { ...stamp, confirm: true });
-    expect(confirmed.ok).toBe(true);
-  });
-
-  it("reserves the declared URL name at deploy, and records it where it can be read back", async () => {
     writeApp(root, declaration({ slug: "sakura-hair" }));
-    const result = await deploySharedApp(root, stamp);
-    expect(result.ok === true && result.slug).toBe("sakura-hair");
-    // `published: false` — the reservation exists and nobody can resolve it yet, which is what
-    // keeps /staging/{aid} unguessable while the roster tests the app.
+    const closed = await publishSharedApp(root, stamp);
+    expect(closed.ok === false ? closed.problems : []).toEqual([]);
+    expect(closed.ok === true && closed.publicOpen).toBe(false);
+    expect(docs.app()).not.toHaveProperty("public");
+    expect(docs.doc(`apps/${AID}/config`, "public")).toBeUndefined();
+    expect(docs.doc(`apps/${AID}/config`, "view")).toBeUndefined();
     expect(docs.doc("appSlugs", "sakura-hair")).toEqual({ aid: AID, published: false });
-    // On the app document, because appSlugs is unreadable until publish: this is the only place
+    // The roster's half is untouched: the app goes on being the app, for the people on it.
+    expect(docs.doc(`apps/${AID}/collections`, "bookings")).toBeDefined();
+  });
+
+  it("says so rather than reporting success when there was nothing open to close", async () => {
+    await publishSharedApp(root, stamp);
+    const result = await unpublishSharedApp(root);
+    expect(result.ok === true && result.wasOpen).toBe(false);
+  });
+
+  // --- the URL name ----------------------------------------------------------
+  //
+  // `init` reserves it, which is what makes `/m/{slug}` work from the moment an app exists. Publish
+  // takes one only when the app gained a `slug` afterwards (or when init could not finish), and
+  // otherwise just flips the reservation to resolvable.
+
+  it("reserves a name the declaration gained after the app was created", async () => {
+    writeApp(root, declaration({ slug: "sakura-hair" }));
+    const result = await publishSharedApp(root, stamp);
+    expect(result.ok === true && result.slug).toBe("sakura-hair");
+    // `published: false` — a roster-only app holds a name nobody outside it can resolve.
+    expect(docs.doc("appSlugs", "sakura-hair")).toEqual({ aid: AID, published: false });
+    // On the app document, because appSlugs is unreadable to a stranger: this is the only place
     // "which name do we hold?" can be asked from.
     expect(docs.app()?.slug).toBe("sakura-hair");
   });
 
-  it("does not reserve a SECOND name when the same app is deployed again", async () => {
+  it("does not reserve a SECOND name when the same app is published again", async () => {
     writeApp(root, declaration({ slug: "sakura-hair" }));
-    await deploySharedApp(root, stamp);
+    await publishSharedApp(root, stamp);
     docs.writes.length = 0;
 
-    const again = await deploySharedApp(root, stamp);
+    const again = await publishSharedApp(root, stamp);
     expect(again.ok === true && again.slug).toBe("sakura-hair");
     // A URL is a thing people have already sent to each other (D2b). Re-reserving would hand the
-    // app `sakura-hair-2` on every deploy, and the reservation cannot be read back to notice.
-    expect(docs.writes.filter((write) => write.includes("appSlugs"))).toEqual([]);
+    // app `sakura-hair-2` every time, and the reservation cannot be read back to notice. The
+    // existing one is written again — that is the `published` flag following the app's openness —
+    // and no second name is taken.
+    expect(docs.doc("appSlugs", "sakura-hair-2")).toBeUndefined();
+    expect(docs.writes.filter((write) => write.includes("appSlugs"))).toEqual(["set appSlugs/sakura-hair"]);
+    expect(docs.app()?.slug).toBe("sakura-hair");
   });
 
   it("takes the next numbering when the wanted name is held by someone else", async () => {
     docs.store.set("appSlugs", new Map([["sakura-hair", { aid: "someone-else", published: true }]]));
     writeApp(root, declaration({ slug: "sakura-hair" }));
 
-    const result = await deploySharedApp(root, stamp);
+    const result = await publishSharedApp(root, stamp);
     expect(result.ok === true && result.slug).toBe("sakura-hair-2");
     expect(docs.doc("appSlugs", "sakura-hair")).toEqual({ aid: "someone-else", published: true });
-    // Written BACK to app.json — the reservation cannot be read back, so a deploy that did not
-    // find it there would reserve yet another name and leave this one held by nobody.
+    // Written BACK to app.json — the reservation cannot be read back, so a run that did not find
+    // it there would reserve yet another name and leave this one held by nobody.
     expect(JSON.parse(readFileSync(path.join(root, "app.json"), "utf-8")).slug).toBe("sakura-hair-2");
   });
 
   it("makes the name resolve at publish and stop at unpublish, in that order", async () => {
     writeApp(root, declaration({ slug: "sakura-hair", public: { enabled: true, read: ["bookings"] } }));
-    await deploySharedApp(root, stamp);
+    await publishSharedApp(root, stamp);
+    // Re-published, so the reservation already exists and only the flag moves.
     docs.writes.length = 0;
 
     const published = await publishSharedApp(root, stamp);
@@ -515,44 +449,27 @@ describe("shared app deploy / publish / unpublish", () => {
     expect(docs.writes).toEqual([`set apps/${AID}`, "set appSlugs/sakura-hair", `delete apps/${AID}/config/public`, `delete apps/${AID}/config/view`]);
   });
 
-  it("publishes the form the public page draws from", async () => {
-    // The page cannot read the schema, so the config document — the only one a visitor may read —
-    // carries the labels and the choices. Without it the form is a row of unlabelled boxes.
-    writeApp(
-      root,
-      declaration({
-        collections: { bookings: { submitOnly: true } },
-        public: { enabled: true, read: [], submit: { bookings: { auth: "verifiedEmail", emailField: "note", createFields: ["note"] } } },
-      }),
-    );
-    await deploySharedApp(root, stamp);
-    await publishSharedApp(root, stamp);
-
-    expect(docs.doc(`apps/${AID}/config`, "public")?.form).toEqual({ bookings: { fields: { note: { label: "Note", type: "string" } } } });
-  });
-
   it("does not make the name resolve when the app is not open to anonymous visitors", async () => {
-    // A published reservation is world-readable, and what it reveals is the aid — the
-    // /staging/{aid} entrance. Publishing a roster-only declaration is a normal thing to do, and
-    // it must not hand that out while the same operation reports the app is closed.
+    // A published reservation is world-readable, and what it reveals is the aid, which addresses
+    // everything under `apps/{aid}`. Publishing a roster-only declaration is a normal thing to do,
+    // and it must not hand that out while the same operation reports the app is closed.
     writeApp(root, declaration({ slug: "sakura-hair" }));
-    await deploySharedApp(root, stamp);
     const result = await publishSharedApp(root, stamp);
     expect(result.ok === true && result.publicOpen).toBe(false);
     expect(docs.doc("appSlugs", "sakura-hair")).toEqual({ aid: AID, published: false });
   });
 
   it("reclaims its own reservation rather than taking a numbered one", async () => {
-    // The record on the app document can be lost — a deploy that reserved and then failed to
-    // record it, a document restored from before. `create` then fails for a name this app already
-    // holds, and taking `-2` would strand the first reservation: live, held by an app that no
-    // longer claims it, and unreadable by anyone who might notice.
+    // The record on the app document can be lost — a run that reserved and then failed to record
+    // it, a document restored from before. `create` then fails for a name this app already holds,
+    // and taking `-2` would strand the first reservation: live, held by an app that no longer
+    // claims it, and unreadable by anyone who might notice.
     writeApp(root, declaration({ slug: "sakura-hair" }));
-    await deploySharedApp(root, stamp);
+    await publishSharedApp(root, stamp);
     const app = docs.app();
     if (app) delete app.slug;
 
-    const again = await deploySharedApp(root, stamp);
+    const again = await publishSharedApp(root, stamp);
     expect(again.ok === true && again.slug).toBe("sakura-hair");
     expect(docs.doc("appSlugs", "sakura-hair-2")).toBeUndefined();
     expect(docs.app()?.slug).toBe("sakura-hair");
@@ -563,26 +480,51 @@ describe("shared app deploy / publish / unpublish", () => {
     // reservation — and if the name being reclaimed was public, the app records the numbered one
     // while the original keeps resolving, beyond the reach of unpublish.
     writeApp(root, declaration({ slug: "sakura-hair" }));
-    await deploySharedApp(root, stamp);
+    await publishSharedApp(root, stamp);
     const app = docs.app();
     if (app) delete app.slug;
     docs.failAt = "appSlugs/sakura-hair";
 
-    const result = await deploySharedApp(root, stamp);
+    const result = await publishSharedApp(root, stamp);
     expect(result.ok).toBe(false);
-    expect(result.ok === false && result.problems.join(" ")).toContain("could not establish");
+    expect(result.ok === false && result.problems.join(" ")).toContain("says nothing about WHY");
     expect(docs.doc("appSlugs", "sakura-hair-2")).toBeUndefined();
+  });
+
+  it("never leaves a resolving name the app document does not know about", async () => {
+    // The rename that fails between the reservation and the record. The new name is reserved
+    // UNPUBLISHED whatever the app's state, so this window is a name that opens nothing — not a
+    // world-resolvable name for an app whose document still says the old one, which no later
+    // `unpublish` could close, because unpublish acts on the name the document says.
+    writeApp(root, declaration({ slug: "sakura-hair", public: { enabled: true, read: ["bookings"] } }));
+    await publishSharedApp(root, stamp);
+    expect(docs.doc("appSlugs", "sakura-hair")).toEqual({ aid: AID, published: true });
+
+    writeApp(root, declaration({ slug: "sakura-salon", public: { enabled: true, read: ["bookings"] } }));
+    // The write that records the new name on the app document is the one that fails.
+    docs.failAt = `apps/${AID}`;
+    const failed = await publishSharedApp(root, stamp);
+    expect(failed.ok).toBe(false);
+    expect(docs.doc("appSlugs", "sakura-salon")).toEqual({ aid: AID, published: false });
+    expect(docs.doc("appSlugs", "sakura-hair")).toEqual({ aid: AID, published: false });
+
+    // And publishing again repairs it: the reservation is reclaimed, recorded, and flipped.
+    docs.failAt = null;
+    const repaired = await publishSharedApp(root, stamp);
+    expect(repaired.ok === false ? repaired.problems : []).toEqual([]);
+    expect(repaired.ok === true && repaired.slug).toBe("sakura-salon");
+    expect(docs.doc("appSlugs", "sakura-salon")).toEqual({ aid: AID, published: true });
+    expect(docs.app()?.slug).toBe("sakura-salon");
   });
 
   it("stops the previous name from resolving when the app is renamed", async () => {
     writeApp(root, declaration({ slug: "sakura-hair", public: { enabled: true, read: ["bookings"] } }));
-    await deploySharedApp(root, stamp);
     await publishSharedApp(root, stamp);
     expect(docs.doc("appSlugs", "sakura-hair")).toEqual({ aid: AID, published: true });
 
     // The author renames the app's URL.
     writeApp(root, declaration({ slug: "sakura-salon", public: { enabled: true, read: ["bookings"] } }));
-    const renamed = await deploySharedApp(root, stamp);
+    const renamed = await publishSharedApp(root, stamp);
     expect(renamed.ok === true && renamed.slug).toBe("sakura-salon");
 
     // The old one keeps pointing here — it is never deleted, because a freed name is one somebody
@@ -593,19 +535,51 @@ describe("shared app deploy / publish / unpublish", () => {
     expect(docs.app()?.slug).toBe("sakura-salon");
   });
 
-  it("says so rather than reporting success when there was nothing open to close", async () => {
-    await deploySharedApp(root, stamp);
-    const result = await unpublishSharedApp(root);
-    expect(result.ok === true && result.wasOpen).toBe(false);
+  it("keeps a renamed app OPEN while it is being published", async () => {
+    // The reservation write REPLACES the app document, and the document publish projects carries
+    // no `public` — it is held back for the last write. So a rename that wrote the projection
+    // alone would close the app at the START of the run: a failure anywhere after that leaves it
+    // dark, which is the opposite of the trade this ordering makes (open on a mixed version).
+    writeApp(root, declaration({ slug: "sakura-hair", public: { enabled: true, read: ["bookings"] } }));
+    await publishSharedApp(root, stamp);
+    expect(docs.app()?.public).toMatchObject({ enabled: true });
+
+    writeApp(root, declaration({ slug: "sakura-salon", public: { enabled: true, read: ["bookings"] } }));
+    // The run dies after the reservation, on the first document it would write.
+    docs.failAt = `apps/${AID}/collections/bookings`;
+    const result = await publishSharedApp(root, stamp);
+    expect(result.ok).toBe(false);
+    // Still open, on the version that was live before this run.
+    expect(docs.app()?.public).toMatchObject({ enabled: true });
+    // And the name it took is recorded, so the next run reclaims it rather than numbering.
+    expect(docs.app()?.slug).toBe("sakura-salon");
+  });
+
+  it("writes the whole app document when the publish created it", async () => {
+    // `publishSteps` SKIPS the app-document write when this run established it, because `claimApp`
+    // (and the reservation after it) wrote exactly the same projection. That is only true while
+    // the two agree — this pins the result rather than the reasoning.
+    writeApp(root, declaration({ slug: "sakura-hair", public: { enabled: true, read: ["bookings"] } }));
+    const result = await publishSharedApp(root, stamp);
+    expect(result.ok === false ? result.problems : []).toEqual([]);
+    expect(docs.app()).toMatchObject({
+      aid: AID,
+      name: "App Under Test",
+      owner: OWNER.uid,
+      slug: "sakura-hair",
+      memberEmails: [OWNER.email],
+      publishedBy: OWNER.email,
+      public: { enabled: true, read: ["bookings"] },
+    });
   });
 
   // --- the app's own pages, per audience -------------------------------------
 
   /** A declaration with a page for the front desk and one for a participant.
    *
-   *  `participantRead` is what makes the second one publishable at all: without
-   *  it the participant reaches nothing in `bookings`, and the gate refuses the
-   *  page rather than publishing one the rules would deny. */
+   *  `participantRead` is what makes the second one publishable at all: without it the participant
+   *  reaches nothing in `bookings`, and the gate refuses the page rather than publishing one the
+   *  rules would deny. */
   const withPages = (extra: Record<string, unknown> = {}) => {
     mkdirSync(path.join(root, "views"), { recursive: true });
     writeFileSync(path.join(root, "views", "desk.html"), "<p>front desk</p>");
@@ -623,91 +597,61 @@ describe("shared app deploy / publish / unpublish", () => {
     );
   };
 
-  it("stages a page in the tier its audience can read, and nowhere else", async () => {
+  it("writes a page to the tier its audience can read, and nowhere else", async () => {
     withPages();
-    const result = await deploySharedApp(root, stamp);
+    const result = await publishSharedApp(root, stamp);
     expect(result.ok === false ? result.problems : []).toEqual([]);
-    expect(result.ok && result.pages).toEqual(["desk", "mine"]);
+    expect(result.ok && result.memberPages).toEqual(["desk"]);
+    expect(result.ok && result.participantPages).toEqual(["mine"]);
 
-    // The staff page is in the tier only a role-holder reads; the participant's
-    // is in the one the whole roster reads. Splitting the PROJECTION alone would
-    // not do this — the HTML itself carries the app's vocabulary.
-    expect(docs.doc(`apps/${AID}/member`, "staged:desk")).toMatchObject({ html: "<p>front desk</p>" });
-    expect(docs.doc(`apps/${AID}/roster`, "staged:mine")).toMatchObject({ html: "<p>your booking</p>" });
-    expect(docs.doc(`apps/${AID}/member`, "staged:mine")).toBeUndefined();
-    expect(docs.doc(`apps/${AID}/roster`, "staged:desk")).toBeUndefined();
-
-    // Deploy stages and publishes NOTHING: the members' page is not live until
-    // publish, exactly like the schemas beside it.
-    expect(docs.doc(`apps/${AID}/member`, "live:desk")).toBeUndefined();
+    // The staff page is in the tier only a role-holder reads; the participant's is in the one the
+    // whole roster reads. Splitting the PROJECTION alone would not do this — the HTML itself
+    // carries the app's vocabulary.
+    expect(docs.doc(`apps/${AID}/member`, "live:desk")).toMatchObject({ html: "<p>front desk</p>" });
+    expect(docs.doc(`apps/${AID}/roster`, "live:mine")).toMatchObject({ html: "<p>your booking</p>" });
+    expect(docs.doc(`apps/${AID}/member`, "live:mine")).toBeUndefined();
+    expect(docs.doc(`apps/${AID}/roster`, "live:desk")).toBeUndefined();
   });
 
   it("tells each audience how to read its own data, and only its own", async () => {
     withPages();
-    await deploySharedApp(root, stamp);
+    await publishSharedApp(root, stamp);
 
     // A member reads the collection whole; every read a role opens is unscoped.
-    expect(docs.doc(`apps/${AID}/member`, "staged:config")).toMatchObject({
+    expect(docs.doc(`apps/${AID}/member`, "live:config")).toMatchObject({
       views: [{ id: "desk", collections: [{ cid: "bookings", scope: "all" }] }],
     });
-    // A participant reads it whole too HERE, because `participantRead` says so —
-    // and the page is told which, since an unscoped list on an own-row collection
-    // is denied rather than narrowed.
-    expect(docs.doc(`apps/${AID}/roster`, "staged:config")).toMatchObject({
+    // A participant reads it whole too HERE, because `participantRead` says so — and the page is
+    // told which, since an unscoped list on an own-row collection is denied rather than narrowed.
+    expect(docs.doc(`apps/${AID}/roster`, "live:config")).toMatchObject({
       views: [{ id: "mine", collections: [{ cid: "bookings", scope: "all" }] }],
     });
-    // The roster itself is in neither: this document is read by every
-    // participant, and the addresses on it are their classmates'.
-    expect(docs.doc(`apps/${AID}/roster`, "staged:config")).not.toHaveProperty("members");
+    // The roster itself is in neither: this document is read by every participant, and the
+    // addresses on it are their classmates'.
+    expect(docs.doc(`apps/${AID}/roster`, "live:config")).not.toHaveProperty("members");
   });
 
-  it("promotes the pages on publish and withdraws the one the declaration dropped", async () => {
+  it("withdraws the page the declaration dropped", async () => {
     withPages();
-    await deploySharedApp(root, stamp);
-    const published = await publishSharedApp(root, stamp);
-    expect(published.ok === false ? published.problems : []).toEqual([]);
-    expect(published.ok && published.memberPages).toEqual(["desk"]);
-    expect(published.ok && published.participantPages).toEqual(["mine"]);
-    expect(docs.doc(`apps/${AID}/member`, "live:desk")).toMatchObject({ html: "<p>front desk</p>" });
+    await publishSharedApp(root, stamp);
+    expect(docs.doc(`apps/${AID}/member`, "live:desk")).toBeDefined();
 
-    // The author withdraws the staff page. Merely not writing it again is not
-    // enough: the tier is readable by everyone it admits, forever.
+    // The author withdraws the staff page. Merely not writing it again is not enough: the tier is
+    // readable by everyone it admits, forever.
     writeApp(
       root,
       declaration({ participantRead: ["bookings"], views: [{ id: "mine", audience: "participant", path: "views/mine.html", collections: ["bookings"] }] }),
     );
-    await deploySharedApp(root, stamp);
-    expect(docs.doc(`apps/${AID}/member`, "staged:desk")).toBeUndefined();
     const again = await publishSharedApp(root, stamp);
     expect(again.ok === false ? again.problems : []).toEqual([]);
     expect(docs.doc(`apps/${AID}/member`, "live:desk")).toBeUndefined();
     expect(docs.doc(`apps/${AID}/roster`, "live:mine")).toBeDefined();
   });
 
-  it("publishes the page the roster reviewed, not the one in the working tree", async () => {
-    // The whole reason for the split: `/staging/{aid}` is where the roster
-    // tried this page. Re-reading the file at publish would let an edit made
-    // after the last deploy go live with nobody having looked at it — the same
-    // guarantee `readStaged` makes about the schemas.
-    withPages();
-    await deploySharedApp(root, stamp);
-    writeFileSync(path.join(root, "views", "desk.html"), "<p>edited after the deploy</p>");
-
-    const published = await publishSharedApp(root, stamp);
-    expect(published.ok === false ? published.problems : []).toEqual([]);
-    expect(docs.doc(`apps/${AID}/member`, "live:desk")).toMatchObject({ html: "<p>front desk</p>" });
-
-    // And a deploy is what makes the edit publishable, as it is for a schema.
-    await deploySharedApp(root, stamp);
-    await publishSharedApp(root, stamp);
-    expect(docs.doc(`apps/${AID}/member`, "live:desk")).toMatchObject({ html: "<p>edited after the deploy</p>" });
-  });
-
   it("stamps the projection and every page with the SAME publish", async () => {
-    // They are separate documents, and the runtime refuses to draw a pair that
-    // disagrees — a view handed fields it has never seen.
+    // They are separate documents, and the runtime refuses to draw a pair that disagrees — a view
+    // handed fields it has never seen.
     withPages();
-    await deploySharedApp(root, stamp);
     await publishSharedApp(root, stamp);
     const config = docs.doc(`apps/${AID}/member`, "live:config");
     const page = docs.doc(`apps/${AID}/member`, "live:desk");
@@ -715,209 +659,77 @@ describe("shared app deploy / publish / unpublish", () => {
     expect(page?.publishedAt).toBe(config?.publishedAt);
   });
 
-  it("refuses to publish what a half-finished deploy left", async () => {
-    // `runWrites` can stop after any successful write, so a redeploy can leave
-    // the new settings beside the previous deploy's HTML. Staging NOTICES that
-    // — the two carry different stamps and the runtime refuses to draw — but
-    // publish re-stamps everything it promotes, which would make the mismatched
-    // pair look like one publish and hand the page fields it has never seen.
+  it("writes the pages before the settings that name them", async () => {
+    // The order decides what a half-finished run leaves: a page nobody has been told about
+    // (invisible, harmless) rather than a name pointing at a page that is not there.
     withPages();
-    await deploySharedApp(root, stamp);
-
-    // The page vanishes while its settings stay: what an interrupted deploy
-    // (or a hand edit) leaves behind.
-    docs.store.get(`apps/${AID}/member`)?.delete("staged:desk");
-
-    const result = await publishSharedApp(root, stamp);
-    expect(result.ok).toBe(false);
-    expect(result.ok === false && result.problems.join(" ")).toContain("which is not staged");
-    // Nothing was written: the refusal has to come before the schemas are promoted.
-    expect(docs.doc(`apps/${AID}/member`, "live:config")).toBeUndefined();
-
-    // Deploying again is the repair, and then it publishes.
-    await deploySharedApp(root, stamp);
-    const again = await publishSharedApp(root, stamp);
-    expect(again.ok === false ? again.problems : []).toEqual([]);
-  });
-
-  it("refuses to promote a page whose settings were already withdrawn", async () => {
-    // The other half-finished deploy: withdrawing a tier deletes its settings
-    // and its pages, and a run that stopped between the two leaves the page.
-    // Promoting it would make live a page the last deploy was in the middle of
-    // taking away — with nothing to list it, and readable by everyone the tier
-    // admits.
-    withPages();
-    await deploySharedApp(root, stamp);
-    docs.store.get(`apps/${AID}/member`)?.delete("staged:config");
-
-    const result = await publishSharedApp(root, stamp);
-    expect(result.ok).toBe(false);
-    expect(result.ok === false && result.problems.join(" ")).toContain("and no staged:config");
-    expect(docs.doc(`apps/${AID}/member`, "live:desk")).toBeUndefined();
-  });
-
-  it("promotes what the settings name, not whatever is lying in the tier", async () => {
-    // A redeploy that drops a page writes the new settings and then deletes the
-    // old staged document. If that deletion fails, the settings are perfectly
-    // coherent and the withdrawn page is still there — promoting everything
-    // staged would put it back, live and named by nothing.
-    withPages();
-    writeFileSync(path.join(root, "views", "stock.html"), "<p>stock room</p>");
-    const member = (ids: string[]) =>
-      declaration({
-        participantRead: ["bookings"],
-        views: ids.map((id) => ({ id, audience: "member", path: `views/${id}.html`, collections: ["bookings"] })),
-      });
-    // The tier KEEPS a page, so its settings are still there and still
-    // coherent — this is not the withdrawn-tier case above.
-    writeApp(root, member(["desk", "stock"]));
-    await deploySharedApp(root, stamp);
-    writeApp(root, member(["stock"]));
-    await deploySharedApp(root, stamp);
-    // The deletion that failed, reproduced: the page is back in the tier while
-    // the settings say nothing about it.
-    await docs.set(`apps/${AID}/member`, "staged:desk", { html: "<p>withdrawn</p>", publishedAt: 1 });
-
-    const result = await publishSharedApp(root, stamp);
-    expect(result.ok === false ? result.problems : []).toEqual([]);
-    expect(docs.doc(`apps/${AID}/member`, "live:desk")).toBeUndefined();
-    expect(result.ok && result.memberPages).toEqual(["stock"]);
+    await publishSharedApp(root, stamp);
+    const wrote = docs.writes.filter((line) => line.includes(`apps/${AID}/member/live:`));
+    // Both present FIRST: two missing writes are both -1, and -1 < -1 is false, but one missing
+    // write reads as an order that holds.
+    expect(wrote).toContain(`set apps/${AID}/member/live:desk`);
+    expect(wrote).toContain(`set apps/${AID}/member/live:config`);
+    expect(wrote.indexOf(`set apps/${AID}/member/live:desk`)).toBeLessThan(wrote.indexOf(`set apps/${AID}/member/live:config`));
   });
 
   it("withdraws the settings last, so a stopped run never leaves a name with nothing behind it", async () => {
     withPages();
-    await deploySharedApp(root, stamp);
+    await publishSharedApp(root, stamp);
     // Every page dropped: the whole tier is withdrawn.
     writeApp(root, declaration({ participantRead: ["bookings"] }));
-    await deploySharedApp(root, stamp);
-    const removed = docs.writes.filter((line) => line.startsWith(`delete apps/${AID}/member/staged:`));
-    expect(removed.indexOf(`delete apps/${AID}/member/staged:desk`)).toBeLessThan(removed.indexOf(`delete apps/${AID}/member/staged:config`));
-  });
-
-  it("tells two deploys apart by identity, not by the clock", async () => {
-    // `publishedAt` is a millisecond and a millisecond is not an identity: the
-    // fixture's injected clock returns the same value every run, which is
-    // exactly the collision a coarse clock or two concurrent deploys produce.
-    // A mixed staged set must still be refused.
-    withPages();
-    await deploySharedApp(root, stamp);
-    const staged = docs.doc(`apps/${AID}/member`, "staged:desk");
-    expect(typeof staged?.deployId).toBe("string");
-
-    // A page from ANOTHER deploy, at the same millisecond.
-    await docs.set(`apps/${AID}/member`, "staged:desk", { html: "<p>other deploy</p>", publishedAt: 1_700_000_000_000, deployId: "another-run" });
-
-    const result = await publishSharedApp(root, stamp);
-    expect(result.ok).toBe(false);
-    expect(result.ok === false && result.problems.join(" ")).toContain("staged by a different deploy");
-  });
-
-  it("refuses to publish a schema and a page that came from different deploys", async () => {
-    // They are written by one run, in sequence, and `runWrites` can stop
-    // between them. Promote a new schema beside the previous page and the page
-    // draws fields the version it was written against did not have. Neither
-    // document is wrong on its own; the pair is.
-    withPages();
-    await deploySharedApp(root, stamp);
-    const schema = docs.doc(`apps/${AID}/staging`, "bookings");
-    expect(typeof schema?.deployId).toBe("string");
-
-    // A schema left by an earlier deploy, beside pages from this one.
-    await docs.set(`apps/${AID}/staging`, "bookings", { ...schema, deployId: "an-earlier-run" });
-
-    const result = await publishSharedApp(root, stamp);
-    expect(result.ok).toBe(false);
-    expect(result.ok === false && result.problems.join(" ")).toContain("more than one deploy");
-    expect(docs.doc(`apps/${AID}/member`, "live:desk")).toBeUndefined();
-
-    // Deploying again stages one complete set, and then it publishes.
-    await deploySharedApp(root, stamp);
-    const again = await publishSharedApp(root, stamp);
-    expect(again.ok === false ? again.problems : []).toEqual([]);
-  });
-
-  it("still publishes an app whose staged schemas predate the deploy identity", async () => {
-    // Staged schemas exist in the wild from before this field. Refusing every
-    // one of those until it is redeployed would be a worse failure than the one
-    // the check guards.
-    await deploySharedApp(root, stamp);
-    const schema = docs.doc(`apps/${AID}/staging`, "bookings") ?? {};
-    delete schema.deployId;
-    await docs.set(`apps/${AID}/staging`, "bookings", schema);
-
-    const result = await publishSharedApp(root, stamp);
-    expect(result.ok === false ? result.problems : []).toEqual([]);
-  });
-
-  it("publishes the pages before the settings that name them", async () => {
-    // The listing these come from is ordered by document id, which puts
-    // `config` before every page — so the order has to be imposed rather than
-    // inherited, or a first publish that stops part-way advertises a page that
-    // is not there.
-    withPages();
-    await deploySharedApp(root, stamp);
     docs.writes.length = 0;
     await publishSharedApp(root, stamp);
-    const wrote = docs.writes.filter((line) => line.includes(`apps/${AID}/member/live:`));
-    expect(wrote.indexOf(`set apps/${AID}/member/live:desk`)).toBeLessThan(wrote.indexOf(`set apps/${AID}/member/live:config`));
+    const removed = docs.writes.filter((line) => line.startsWith(`delete apps/${AID}/member/live:`));
+    expect(removed).toContain(`delete apps/${AID}/member/live:desk`);
+    expect(removed).toContain(`delete apps/${AID}/member/live:config`);
+    expect(removed.indexOf(`delete apps/${AID}/member/live:desk`)).toBeLessThan(removed.indexOf(`delete apps/${AID}/member/live:config`));
   });
 
-  it("stages the pages before the settings that name them", async () => {
-    // The order decides what a half-finished deploy leaves: a page nobody has
-    // been told about (invisible, harmless) rather than a name pointing at a
-    // page that is not there.
-    withPages();
-    await deploySharedApp(root, stamp);
-    const wrote = docs.writes.filter((line) => line.includes(`apps/${AID}/member/staged:`));
-    expect(wrote.indexOf(`set apps/${AID}/member/staged:desk`)).toBeLessThan(wrote.indexOf(`set apps/${AID}/member/staged:config`));
-  });
-
-  it("takes the published pages down on unpublish and leaves the staged ones alone", async () => {
+  it("leaves the roster's pages standing on unpublish", async () => {
+    // These used to come down here, when `live:` meant "published" and the roster went on working
+    // from a `staged:` copy at `/staging/{aid}`. There is no such copy any more: these documents
+    // ARE the roster's app, read at `/m/{slug}` and `/p/{slug}` and gated by `staffOf` / `listedIn`
+    // — never by anything unpublish touches. Deleting them would take the front desk's page away
+    // from the front desk because the owner closed the app to strangers.
     withPages({ public: { enabled: true, read: ["bookings"] } });
-    await deploySharedApp(root, stamp);
     await publishSharedApp(root, stamp);
     expect(docs.doc(`apps/${AID}/member`, "live:desk")).toBeDefined();
 
     const closed = await unpublishSharedApp(root);
     expect(closed.ok === false ? closed.problems : []).toEqual([]);
-    // Closed: the staff page is readable by everyone that tier admits whatever
-    // else is shut, so leaving it would be a live page on a taken-down app.
-    expect(docs.doc(`apps/${AID}/member`, "live:desk")).toBeUndefined();
-    expect(docs.doc(`apps/${AID}/roster`, "live:mine")).toBeUndefined();
-    // NOT undeployed. `/staging/{aid}` is where the owner works between
-    // publishes, and taking that away would leave them unable to look at their
-    // own app until they published it again.
-    expect(docs.doc(`apps/${AID}/member`, "staged:desk")).toBeDefined();
+    expect(docs.doc(`apps/${AID}/member`, "live:desk")).toBeDefined();
+    expect(docs.doc(`apps/${AID}/roster`, "live:mine")).toBeDefined();
+    // What DOES come down is the public half, and only that.
+    expect(docs.app()).not.toHaveProperty("public");
+    expect(docs.doc(`apps/${AID}/config`, "public")).toBeUndefined();
   });
 
   it("refuses a page that cannot be read, before anything is written", async () => {
     mkdirSync(path.join(root, "views"), { recursive: true });
     writeApp(root, declaration({ views: [{ id: "desk", audience: "member", path: "views/missing.html", collections: ["bookings"] }] }));
-    const result = await deploySharedApp(root, stamp);
+    const result = await publishSharedApp(root, stamp);
     expect(result.ok).toBe(false);
     expect(result.ok === false && result.problems.join(" ")).toContain("views[0].path");
-    // The name of the key the author can go and edit — not `public.view`, which
-    // is not in this file.
+    // The name of the key the author can go and edit — not `public.view`, which is not in this
+    // file.
     expect(result.ok === false && result.problems.join(" ")).not.toContain("public.view.path");
+    expect(docs.store.get(`apps/${AID}/collections`)).toBeUndefined();
   });
 
-  it("refuses a participant page whose collection the PROMOTED rules will not open", async () => {
-    // The trap: `participantRead` is added to app.json and publish is run
-    // without a deploy. Publish promotes what DEPLOY staged, so the rules would
-    // deny the read while the page was published, offered, and then refused.
+  it("refuses a participant page whose collection the rules will not open", async () => {
     mkdirSync(path.join(root, "views"), { recursive: true });
     writeFileSync(path.join(root, "views", "mine.html"), "<p>your booking</p>");
     writeApp(root, declaration({ views: [{ id: "mine", audience: "participant", path: "views/mine.html", collections: ["bookings"] }] }));
-    const refused = await deploySharedApp(root, stamp);
+    const refused = await publishSharedApp(root, stamp);
     expect(refused.ok).toBe(false);
     expect(refused.ok === false && refused.problems.join(" ")).toContain("a participant cannot read");
 
-    // The neighbouring declaration: the same page, deployed with the read it needs.
+    // The neighbouring declaration: the same page, with the read it needs.
     writeApp(
       root,
       declaration({ participantRead: ["bookings"], views: [{ id: "mine", audience: "participant", path: "views/mine.html", collections: ["bookings"] }] }),
     );
-    const deployed = await deploySharedApp(root, stamp);
-    expect(deployed.ok === false ? deployed.problems : []).toEqual([]);
+    const published = await publishSharedApp(root, stamp);
+    expect(published.ok === false ? published.problems : []).toEqual([]);
   });
 });

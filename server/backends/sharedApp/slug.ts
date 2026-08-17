@@ -1,4 +1,4 @@
-// The URL name — reserving it at deploy, and flipping it public at publish.
+// The URL name — reserving it when the app is created, and flipping it public at publish.
 //
 // An app is handed out as `https://<host>/a/{slug}`, and `appSlugs/{slug}` is what resolves that
 // name to an aid. Two things about that document shape the whole of this file:
@@ -7,7 +7,7 @@
 //     read anything under `apps/{aid}`;
 //   - it is UNREADABLE until the app is published (`allow read: if resource.data.published ==
 //     true`), so that a human-readable name cannot be guessed to discover the aid — which is the
-//     `/staging/{aid}` entrance.
+//     the address everything under `apps/{aid}` is keyed by.
 //
 // The second one is why this is more than a write. Nobody — the owner included — can ask which
 // slug an app already holds, so `app.json` is the record: the reserved name is written back
@@ -42,22 +42,22 @@ function candidates(wanted: string): string[] {
 
 /** Reserve the declared slug (or the first free numbering of it) and record it in `app.json`.
  *
- *  `recorded` is what the declaration said BEFORE this deploy — when it names a slug this app
- *  already reserved, nothing is done at all. That is the whole reason the write-back exists: a
- *  reservation cannot be read back, so re-reserving on every deploy would hand the app a new URL
- *  each time somebody deployed.
+ *  `alreadyHeld` says the declaration names a slug this app already reserved — then nothing is done
+ *  at all. That is the whole reason the write-back exists: a reservation cannot be read back, so
+ *  re-reserving every time would hand the app a new URL on every run.
+ *
+ *  IT IS ALWAYS RESERVED UNPUBLISHED, whatever the app's own state. Publish flips it — as its own
+ *  step, after everything the name points at (`publish.ts`) — and that split is what makes a
+ *  half-finished rename recoverable: reserving a PUBLISHED name and then failing to record it on
+ *  the app document leaves a world-resolvable name the app does not know it holds, which no later
+ *  `unpublish` can close, because unpublish acts on the name the app document says. Reserved
+ *  unpublished, the same failure leaves a name that resolves for nobody, and the next publish
+ *  reclaims it and flips it.
  *
  *  Ordering: this runs AFTER `apps/{aid}` is written, because the reservation's `allow create`
- *  resolves the owner through `get(apps/{aid})` — on a first deploy there is nothing to resolve
- *  until that document exists. */
-export async function reserveSlug(
-  handle: SharedAppHandle,
-  aid: string,
-  root: string,
-  wanted: string,
-  alreadyHeld: boolean,
-  appIsPublic: boolean,
-): Promise<SlugResult> {
+ *  resolves the owner through `get(apps/{aid})` — on a first run there is nothing to resolve until
+ *  that document exists. */
+export async function reserveSlug(handle: SharedAppHandle, aid: string, root: string, wanted: string, alreadyHeld: boolean): Promise<SlugResult> {
   if (alreadyHeld) return { ok: true, slug: wanted, reserved: false };
 
   const taken: string[] = [];
@@ -70,7 +70,7 @@ export async function reserveSlug(
     // it is not, and both require this app's owner: it succeeds exactly when the name is free or
     // already ours, and is refused when somebody else holds it. That refusal IS the answer, which
     // is why nothing is reported for it.
-    const claimed = await claimSlug(handle, aid, candidate, appIsPublic);
+    const claimed = await claimSlug(handle, aid, candidate);
     if (claimed === "unknown") return probeFailed(candidate);
     if (claimed === "theirs") {
       taken.push(candidate);
@@ -84,17 +84,17 @@ export async function reserveSlug(
     partial: true,
     problems: [
       `every candidate for the URL name is taken: ${taken.join(", ")}.`,
-      "The app itself is deployed — this is only the public name. Choose a different `slug` in app.json and deploy again.",
+      "The app itself is written — this is only the public name. Choose a different `slug` in app.json and publish again.",
     ],
   };
 }
 
 /** Take the name, or find out that somebody else has it. One write, three answers.
  *
- *  `published` is written from the APP's state rather than guessed: the app document holds the
- *  `public` block, so it is the authority on whether this app is open, and the reservation should
- *  say the same. When they agree this is a no-op; when they have drifted it repairs the drift
- *  toward the app.
+ *  `published: false`, always — see `reserveSlug`. A reclaim of a name that IS resolving therefore
+ *  stops it resolving for the rest of the run, and publish's own step turns it back on. That is the
+ *  fail-closed direction: the window is a name that opens nothing, not a name that opens an app
+ *  nobody meant to open.
  *
  *  A rules refusal means the name is somebody else's — the reservation cannot be read, so this is
  *  the only way to ask. Anything else (a timeout, a quota) is the question never having been
@@ -103,9 +103,9 @@ export async function reserveSlug(
  *  the original keeps resolving, beyond the reach of unpublish. */
 type Ownership = "ours" | "theirs" | "unknown";
 
-async function claimSlug(handle: SharedAppHandle, aid: string, slug: string, appIsPublic: boolean): Promise<Ownership> {
+async function claimSlug(handle: SharedAppHandle, aid: string, slug: string): Promise<Ownership> {
   try {
-    await handle.docs.set(APP_SLUGS_COLLECTION, slug, appSlugDoc(aid, appIsPublic));
+    await handle.docs.set(APP_SLUGS_COLLECTION, slug, appSlugDoc(aid, false));
     return "ours";
   } catch (err) {
     return isRefusal(err) ? "theirs" : "unknown";
@@ -117,17 +117,17 @@ function probeFailed(candidate: string): SharedAppFailure {
     ok: false,
     partial: true,
     problems: [
-      `the URL name '${candidate}' is taken, and this deploy could not establish whether it is this app's own reservation.`,
-      "Stopping rather than guessing: taking the next numbered name would strand the original, which stays live and — if the app is public — keeps resolving to it.",
-      "The app and its schemas are deployed and the roster can use /staging/{aid}. Deploying again retries just this step.",
+      `the URL name '${candidate}' could not be claimed, and the answer says nothing about WHY: the write failed in a way that is not a refusal, so the name may be free, may be this app's own reservation, or may be somebody else's.`,
+      "Stopping rather than guessing: reading it as somebody else's and taking the next numbered name would strand a reservation this app may already hold — live, unreadable, and held forever by an app that no longer claims it.",
+      "Nothing else about the app changed. Publishing again retries just this step.",
     ],
   };
 }
 
-/** Write the reserved name back, so the next deploy does not reserve a second one.
+/** Write the reserved name back, so the next publish does not reserve a second one.
  *
  *  Returns a failure only when the write failed, and that failure is REAL rather than cosmetic:
- *  the reservation is live and unreadable, so a lost write-back means the next deploy takes
+ *  the reservation is live and unreadable, so a lost write-back means the next run takes
  *  another name and the first one is held forever by an app that no longer claims it. */
 async function recordSlug(root: string, slug: string): Promise<SharedAppFailure | null> {
   const updated = await updateManifest(root, (manifest) => (manifest.slug === slug ? null : { ...manifest, slug }));
@@ -138,7 +138,7 @@ async function recordSlug(root: string, slug: string): Promise<SharedAppFailure 
     problems: [
       `the URL name '${slug}' was reserved, but writing it back to app.json failed:`,
       ...updated.problems,
-      "Deploying again is the repair: a deploy that finds the name taken now asks whether it is THIS app's before moving on, so the reservation is not stranded.",
+      "Publishing again is the repair: a run that finds the name taken now asks whether it is THIS app's before moving on, so the reservation is not stranded.",
     ],
   };
 }

@@ -15,7 +15,11 @@ vi.mock("../../../server/infra/tmux.js", () => ({ tmuxKillSession: vi.fn() }));
 vi.mock("../../../server/session/session-settings.js", () => ({ cleanupSessionSettings: vi.fn() }));
 // The reply the roster shows is re-read from the transcript at the end of a turn; the tests
 // stand in for that file so the refresh can be observed without writing one.
-vi.mock("../../../server/session/session-reads.js", () => ({ readLatestResponse: vi.fn(() => "the reply on disk") }));
+vi.mock("../../../server/session/session-reads.js", () => ({
+  readLatestResponse: vi.fn(() => "the reply on disk"),
+  // Reap drops the resumed prompt-history scan too (#1750); mocked because this spec has no fs.
+  forgetHistoryMemo: vi.fn(),
+}));
 
 const ID = "11111111-2222-4333-8444-555555555555";
 
