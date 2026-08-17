@@ -20,6 +20,7 @@ import { isRecord } from "../../../common/isRecord.js";
 import { declarationProblems, sharedCollections, type SharedAppFailure } from "./context.js";
 import { createManifest, newAid, updateManifest } from "./manifestWrite.js";
 import { viewFilesReport } from "./publicView.js";
+import { scanRecords, type RecordScan } from "./records.js";
 
 /** The roster key that means "every collection". A member's roles map is keyed by cid, with this
  *  as the fallback the rules drop to (`role()` reads `cid` first, then this). */
@@ -392,6 +393,13 @@ export interface CheckReport {
   /** What the pages it names will probably get wrong, without stopping a publish. See
    *  `viewWarnings`. */
   warnings: string[];
+  /** What publish's record scan finds in the LIVE records, or null when there was no session to
+   *  read them with.
+   *
+   *  Null rather than an empty scan, because `check` runs offline and the two answers are not the
+   *  same one: "the records fit" and "nobody looked" differ by exactly the trip this action exists
+   *  to save. The caller has to say which it got. */
+  recordScan: RecordScan | null;
 }
 
 /** Everything wrong with the declaration and this repository's collections, WITHOUT writing
@@ -405,7 +413,10 @@ export async function checkSharedApp(root: string): Promise<CheckReport | Shared
   const raw = await readManifest(root);
   if (!raw.ok) return raw;
   const parsed = parseAuthoredApp(raw.text);
-  if (!parsed.ok) return { ok: true, aid: undefined, collections: [], checkedAs: null, declaredOwner: undefined, problems: parsed.problems, warnings: [] };
+  // Nothing else can be asked of a file that does not parse — there are no collections to discover
+  // and so no records to scan, which is why `recordScan` is null here as well as when signed out.
+  if (!parsed.ok)
+    return { ok: true, aid: undefined, collections: [], checkedAs: null, declaredOwner: undefined, problems: parsed.problems, warnings: [], recordScan: null };
 
   const collections = await sharedCollections(root);
   const handle = firestoreHandle();
@@ -418,6 +429,16 @@ export async function checkSharedApp(root: string): Promise<CheckReport | Shared
   // against the host's bridge: each of those refuses a publish, and answering "publishable" without
   // having opened them is the answer this action exists not to give.
   const pages = await viewFilesReport(root, parsed.app);
+  // The RECORDS too, when there is a session to read them with. A declaration can be flawless and
+  // publish still refuse — the rows already in the app are the other half of its gate, and they are
+  // the half an agent cannot see: `putItems` accepts a row whose typed values are the wrong SHAPE
+  // (a `datetime` carrying a timezone suffix, a `number` stored as text), and only a read checks
+  // that. Seeded in the hundreds, they were found at publish, one regeneration per batch (#1763).
+  //
+  // Publish's own scan, for the reason `declarationProblems` above is publish's own gate: two
+  // implementations of "would this be refused?" answer it differently, and the answer that matters
+  // is the one publish gives.
+  const recordScan = handle === null ? null : await scanRecords(collections, root);
   return {
     ok: true,
     aid: parsed.app.aid,
@@ -426,6 +447,7 @@ export async function checkSharedApp(root: string): Promise<CheckReport | Shared
     declaredOwner: ownerFromRoster(parsed.app),
     problems: [...problems, ...pages.problems],
     warnings: pages.warnings,
+    recordScan,
   };
 }
 

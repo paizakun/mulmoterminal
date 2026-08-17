@@ -10,12 +10,50 @@
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { setSharedCollectionsSupport } from "@mulmoclaude/core/collection/server";
+import { setFirestoreAccessor, setSharedCollectionsSupport, type FirestoreDoc } from "@mulmoclaude/core/collection/server";
 import { initCollectionsBackend } from "../../../server/backends/collections.js";
 import { checkSharedApp } from "../../../server/backends/sharedApp/declare.js";
 import { makeTempDir } from "../../support/tempDir";
 
 const AID = "11111111-2222-3333-4444-555555555555";
+
+/** A shared collection committed beside the declaration, which is what makes it this app's
+ *  (`sharedCollections` discovers by repository, never from `~/.claude/skills`). */
+const withSlots = (root: string): void => {
+  const dir = path.join(root, ".claude", "skills", "slots");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, "SKILL.md"), "---\nname: slots\ndescription: bookable slots\n---\n");
+  writeFileSync(
+    path.join(dir, "schema.json"),
+    JSON.stringify({
+      title: "Slots",
+      icon: "schedule",
+      primaryKey: "id",
+      storage: { type: "firestore" },
+      fields: {
+        id: { type: "string", label: "ID", primary: true, required: true },
+        startAt: { type: "datetime", label: "Start", required: true },
+      },
+    }),
+  );
+};
+
+/** A signed-in session over records the test supplies. `list` ignores the path: what is under test
+ *  is whether `check` READS the records at all, not how the store addresses them. */
+const withSession = (docs: FirestoreDoc[]): void => {
+  setFirestoreAccessor(() => ({
+    email: "owner@example.com",
+    uid: "uid_owner",
+    docs: {
+      list: async () => docs,
+      get: async () => null,
+      set: async () => {},
+      create: async () => true,
+      delete: async () => false,
+      watch: () => () => {},
+    },
+  }));
+};
 
 /** An app that declares one public page, and whatever HTML the test wants behind it. */
 const withApp = (root: string, html: string | null): void => {
@@ -52,6 +90,8 @@ describe("check", () => {
 
   beforeEach(() => {
     root = makeTempDir("mt-shared-app-check-");
+    // Signed out is the default here, as it is for an author who has not connected.
+    setFirestoreAccessor(null);
   });
 
   it("refuses a view whose file is not there", async () => {
@@ -78,5 +118,29 @@ describe("check", () => {
     withApp(root, '<div id="grid"></div><script>view.onState((d) => draw(d)); view.ready();</script>');
     const report = await checkSharedApp(root);
     expect(report.ok && report.warnings).toEqual([]);
+  });
+
+  it("names the live records publish would refuse", async () => {
+    // The trip this closes (#1763): `putItems` took 720 seeded slots whose `datetime` carried a
+    // `Z`, because the write path checks required fields and enums and not the SHAPE of a typed
+    // value. `check` said deployable, publish refused every one of them.
+    withApp(root, '<div id="grid"></div><script>view.onState((d) => draw(d)); view.ready();</script>');
+    withSlots(root);
+    withSession([{ id: "court-a-0800", data: { id: "court-a-0800", startAt: "2026-08-17T15:00:00.000Z" } }]);
+    const report = await checkSharedApp(root);
+    expect(report.ok).toBe(true);
+    expect(report.ok && report.recordScan?.records).toBe(1);
+    expect(report.ok && (report.recordScan?.lines ?? []).join(" ")).toContain("startAt");
+  });
+
+  it("scans nothing, and says so, when there is no session", async () => {
+    // `check` answers offline and must keep doing so — but a report with no record line reads as
+    // "the records are fine", which is the belief that carried those 720 rows to a publish. The
+    // null is what the tool turns into a said-out-loud "NOT scanned".
+    withApp(root, '<div id="grid"></div><script>view.onState((d) => draw(d)); view.ready();</script>');
+    withSlots(root);
+    const report = await checkSharedApp(root);
+    expect(report.ok).toBe(true);
+    expect(report.ok && report.recordScan).toBeNull();
   });
 });

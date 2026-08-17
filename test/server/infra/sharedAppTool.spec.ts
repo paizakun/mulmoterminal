@@ -73,6 +73,17 @@ describe("manageSharedApp, the tool", () => {
     expect(message).toContain("o@e.com");
   });
 
+  it("says out loud that the records were not scanned, signed out", async () => {
+    // Silence about the records reads as "the records are fine", and that is what carried 720
+    // seeded rows with a `Z` in their `datetime` to a publish that refused every one (#1763).
+    const root = makeTempDir("mt-shared-tool-");
+    writeFileSync(path.join(root, "app.json"), JSON.stringify({ aid: "a1", name: "Survey", members: { "o@e.com": { "*": "owner" } } }));
+
+    const message = await manageSharedApp(root, { action: "check" });
+    expect(message).toContain("NOT scanned");
+    expect(message).toContain("Publish checks them too");
+  });
+
   it("checks the declaration without a session, and without writing", async () => {
     const root = makeTempDir("mt-shared-tool-");
     writeFileSync(path.join(root, "app.json"), JSON.stringify({ aid: "a1", members: { "o@e.com": { "*": "owner" } }, slug: "Not A Slug" }));
