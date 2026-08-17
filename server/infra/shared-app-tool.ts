@@ -38,7 +38,7 @@ export const MANAGE_SHARED_APP: ToolDefinition = {
   name: "manageSharedApp",
   description:
     "Start, check, run, invite to, publish or unpublish this repository's shared app (the one declared by its app.json). " +
-    "preview loads the app's pages in a real browser, in the same sandbox a visitor gets, presses their controls, and reports what happened — including what the deployed rules say about a real submission it makes and then removes. " +
+    "preview loads the app's pages in a real browser, in the same sandbox a visitor gets, presses their controls, and reports what happened; it writes nothing unless you send `confirm: true`, which additionally reports what the deployed rules say about a real submission it makes and then removes. " +
     "publish writes the declaration, the collection schemas and the app's pages; when app.json declares a `public` block it also opens the app to anonymous visitors, and unpublish closes that again.",
   prompt:
     "A request for something OTHER PEOPLE fill in or read — a survey, a sign-up sheet, a booking form, a form behind a link — is a shared app, and the `mulmoterminal-shared-app` skill is the path from that sentence to this tool. Read it before offering a printable page or a third-party form.\n" +
@@ -46,7 +46,7 @@ export const MANAGE_SHARED_APP: ToolDefinition = {
     "**init** writes `app.json` for a repository that has none, with the SIGNED-IN address as its owner — use it instead of composing the file yourself, because the owner has to be the address this machine is signed in with and you cannot read that.\n" +
     "**fork** turns a CLONE of somebody else's shared app into the user's own — a new `aid`, a roster of one, the same collections. It is the answer to \"this repository is a clone, make it mine\", and the ONLY one: `init` refuses a repository that already declares an app, so composing the file by hand or deleting `app.json` first are both worse versions of this. It carries `collections` and `public` over unchanged, never touches `.claude/skills/`, and refuses outright when the signed-in address already owns the app.\n" +
     "**check** reports everything wrong with the declaration and this repository's shared collections WITHOUT writing anything. Run it after any edit to `app.json`; it is the only way to find out whether a declaration is publishable before it is published.\n" +
-    "**preview** RUNS the pages. It loads each one in a real headless browser, inside the same sandbox and CSP a visitor gets, hands it the app's real records, and presses each control on a freshly loaded copy of the page. It runs to a budget and SAYS what it left out, so read the counts rather than assuming everything was covered. It reports what a person would otherwise have to notice by eye: a page that never finished loading, a button that does nothing, a form the sandbox blocked, a submission the declaration refused. It WRITES a real record for a press the runtime marked as click-caused, reads what the DEPLOYED RULES said, and removes the record straight away — reporting the verdict, and whether the removal succeeded. A submission the runtime did not mark is reported as WITHHELD and nothing is written for it: a timer, `onState`, a runtime older than 0.9.0, and — the one that surprises authors — a click handler that `await`s work which actually yields, such as `async () => { await validate(); submit() }`, because it resumes in a later task. Tell the author THAT is why their save wrote nothing, rather than letting them conclude the button is broken. Writes run to their own budget; over it, a confirmation is declined and counted. TWO THINGS IT CANNOT TELL YOU, and both are silent: a control that saves from its own `change` handler (a checkbox, a select) is never pressed at all, so it produces no line — not even a withheld one — and the save path goes untested; and the verdict is always the AUTHOR's, because this and the Collections pane both write through the same author path, so NEITHER preview says what the rules would answer a visitor or a participant. Say so rather than letting a clean report stand for either. It also TRIES to write a picture of each page and gives you the path for every one it managed; open it when the words leave the layout in doubt, and read the line that says why a page has none. Run it after writing or editing any view, and again before you publish. If it cannot start a browser it says so; then ask the user to press Preview in the Collections pane.\n" +
+    "**preview** RUNS the pages. It loads each one in a real headless browser, inside the same sandbox and CSP a visitor gets, hands it the app's real records, and presses each control on a freshly loaded copy of the page. It runs to a budget and SAYS what it left out, so read the counts rather than assuming everything was covered. It reports what a person would otherwise have to notice by eye: a page that never finished loading, a button that does nothing, a form the sandbox blocked, a submission the declaration refused. BY DEFAULT IT WRITES NOTHING, and that is the mode to reach for after an edit. With `confirm: true` it WRITES a real record for a press the runtime marked as click-caused, reads what the DEPLOYED RULES said, and removes the record straight away — reporting the verdict, and whether the removal succeeded. Ask the user before sending `confirm`: the record is real while it exists, something may act on it, and the removal can fail. In the default read-only mode every submission is reported as WITHHELD. With `confirm: true`, a submission the runtime did not mark is reported as WITHHELD and nothing is written for it: a timer, `onState`, a runtime older than 0.9.0, and — the one that surprises authors — a click handler that `await`s work which actually yields, such as `async () => { await validate(); submit() }`, because it resumes in a later task. Tell the author THAT is why their save wrote nothing, rather than letting them conclude the button is broken. Writes run to their own budget; over it, a confirmation is declined and counted. TWO THINGS IT CANNOT TELL YOU, and both are silent: a control that saves from its own `change` handler (a checkbox, a select) is never pressed at all, so it produces no line — not even a withheld one — and the save path goes untested; and the verdict is always the AUTHOR's, because this and the Collections pane both write through the same author path, so NEITHER preview says what the rules would answer a visitor or a participant. Say so rather than letting a clean report stand for either. It also TRIES to write a picture of each page and gives you the path for every one it managed; open it when the words leave the layout in doubt, and read the line that says why a page has none. Run it after writing or editing any view, and again before you publish. If it cannot start a browser it says so; then ask the user to press Preview in the Collections pane.\n" +
     "**invite** adds, changes or removes ONE address on the roster (`email`, `role`, optional `cid`; omit `role` to remove). It edits app.json only — it takes effect at the next publish.\n" +
     "**publish** is the dangerous one, and it is the ONLY thing that writes an app after `init`. It writes this repository's declaration, schemas and pages as they are right now, and — when app.json declares `public` — opens the app to anonymous visitors. A declaration with no `public` block publishes to the roster and grants the world nothing. Run `preview` first: nothing else stands between what an LLM wrote and what everybody sees. Publish only when the user asks for it in those terms.\n" +
     "**unpublish** closes the app to anonymous visitors — the `public` block, the world-readable config and the URL name. The schemas and the roster's own pages are LEFT, so the front desk goes on working at /m/{slug} and publishing again just re-opens the public side.\n" +
@@ -78,7 +78,7 @@ export const MANAGE_SHARED_APP: ToolDefinition = {
       confirm: {
         type: "boolean",
         description:
-          "Write the schema although live records do not satisfy it. It is publish's only override, and it accepts the breakage for everybody the app is for.",
+          "Two meanings, both 'I accept a real consequence'. On publish: write the schema although live records do not satisfy it — it accepts the breakage for everybody the app is for. On preview: let the run make REAL records in the live app to learn what the deployed rules say, each removed straight after. Without it, preview still runs every page and reports everything, and simply writes nothing. ASK THE USER BEFORE SENDING IT, either way.",
       },
     },
     required: ["action"],
@@ -228,10 +228,18 @@ function urlName(slug: string | undefined, previous: string | undefined): string
   ];
 }
 
-/** Run the pages and say what happened. No `confirm`, and no write of any kind — see
- *  `headlessHarness.ts` for why a run started by a tool call must never accept a confirmation. */
-async function narratePreview(root: string): Promise<string> {
-  return narrateHeadlessRun(await headlessPreview(root));
+/** Run the pages and say what happened.
+ *
+ *  `confirm` decides whether it may WRITE. Without it the run presses everything and reports
+ *  everything, and every submission is left unwritten — which is the whole of the old behaviour and
+ *  the right default for something run after every edit. With it, a click-caused submission becomes
+ *  a real record in the live app, read for what the deployed rules said, and removed again.
+ *
+ *  The gate is the boundary, not the undo: a creation can be acted on before it is removed, and the
+ *  removal can fail. Same word as `publish` for the same reason — the caller is accepting a real
+ *  consequence on somebody else's behalf. */
+async function narratePreview(root: string, confirm: boolean): Promise<string> {
+  return narrateHeadlessRun(await headlessPreview(root, { write: confirm }));
 }
 
 /** What the LIVE records look like under the schemas this repository holds, in `check`'s voice.
@@ -364,7 +372,7 @@ export async function manageSharedApp(root: string, args: unknown): Promise<stri
   if (action === "init") return serializeBy(key, () => narrateInit(root, body));
   if (action === "fork") return serializeBy(key, () => narrateFork(root, body));
   if (action === "check") return serializeBy(key, () => narrateCheck(root));
-  if (action === "preview") return serializeBy(key, () => narratePreview(root));
+  if (action === "preview") return serializeBy(key, () => narratePreview(root, confirm));
   if (action === "invite") return serializeBy(key, () => narrateInvite(root, body));
   if (action === "publish") return serializeBy(key, () => narratePublish(root, confirm));
   return serializeBy(key, () => narrateUnpublish(root));

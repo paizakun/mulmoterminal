@@ -48,6 +48,30 @@ describe("manageSharedApp, the tool", () => {
     expect(MANAGE_SHARED_APP.parameters?.properties?.action).toMatchObject({ enum: [...SHARED_APP_ACTIONS] });
   });
 
+  it("tells the agent that preview writes nothing until `confirm`, and that it must ask first", () => {
+    // The gate raised in review of #1770. `preview` is the action an agent reaches for after every
+    // edit, and with the 0.9.0 gesture mark an ungated one would put real records in a live app on
+    // an ordinary diagnostic call. The boundary is `confirm`, NOT the undo that follows: while the
+    // record exists something may act on it, and the removal can fail.
+    //
+    // Asserted on the PROSE because the prose is the contract here (see this file's header). What
+    // the flag then does is one pass-through into `headlessPreview({ write })`, and the writerless
+    // behaviour it selects is pinned against a real browser in `headlessPreview.spec.ts`
+    // ("writes nothing when it is given no writer").
+    // The one-liner an agent sees in the tool list has to carry it, not only the long prose —
+    // a `preview` sent from the summary alone must not write.
+    expect(String(MANAGE_SHARED_APP.description)).toContain("writes nothing unless you send `confirm: true`");
+    const prompt = String(MANAGE_SHARED_APP.prompt);
+    expect(prompt).toContain("BY DEFAULT IT WRITES NOTHING");
+    expect(prompt).toMatch(/confirm: true.{0,80}WRITES a real record/s);
+    expect(prompt).toContain("Ask the user before sending `confirm`");
+    // And the flag's own description has to carry it too — an agent that reads only the parameter
+    // must not think it is publish's override alone.
+    const confirmDoc = String((MANAGE_SHARED_APP.parameters?.properties?.confirm as { description?: string })?.description);
+    expect(confirmDoc).toContain("preview");
+    expect(confirmDoc).toContain("ASK THE USER BEFORE SENDING IT");
+  });
+
   it("answers an unknown action with the ones that exist", async () => {
     expect(await manageSharedApp(makeTempDir("mt-shared-tool-"), { action: "ship" })).toContain("init, fork, check, preview, invite, publish, unpublish");
     expect(await manageSharedApp(makeTempDir("mt-shared-tool-"), {})).toContain("init, fork, check, preview, invite, publish, unpublish");

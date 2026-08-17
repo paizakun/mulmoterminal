@@ -239,8 +239,12 @@ state (quoted, in the author's own words), a `<form>` in the live document, a bu
 nothing, a submission the declaration refused. **Run it after writing or editing any view, and
 again before you publish.** A page that has never been through it is a page nobody has run.
 
-**It WRITES, and then takes it straight back.** When a press produces a submission, the run makes a
-real record in the real app and removes it in the same breath — so the report can tell you what the
+**By default it writes nothing — and that is the mode to use after every edit.** It still loads every
+page, presses every control and reports everything; submissions are simply reported and left
+unwritten. Reach for this one freely.
+
+**`confirm: true` lets it write, and you must ASK THE USER FIRST.** When a press produces a
+submission, the run then makes a real record in the real app and removes it in the same breath — so the report can tell you what the
 **deployed rules** say, which is the one answer an author most wants before publishing and the one
 no amount of reading the declaration produces. Each line says whether the record went in, why it
 was refused if it was, and **whether the removal succeeded** — a booking left standing occupies a
@@ -284,6 +288,13 @@ toggle in the Collections pane.
 
 There is also a **budget** on writes. Over it, a confirmation is declined rather than accepted, and
 the run says how many — read that count before concluding every control was exercised.
+
+**Why the ask, when the record is removed a moment later:** the removal is not the safety boundary.
+While the record exists it is real — a rule, a function or an integration may act on it, a
+notification may already have gone out — and the removal itself can fail (the report has a line for
+exactly that, and in a first-come app a record left standing occupies a real slot). So say what it
+will do and get a yes, the same as for `publish`. Run the default read-only preview as often as you
+like; ask before the writing one.
 
 So the report proves the page draws, the handshake completes, the records arrive, **a press reaches
 the parent as a submission the declaration accepts**, and — for the presses that were written —

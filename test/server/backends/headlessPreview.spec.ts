@@ -190,18 +190,28 @@ const RESUBMITS_ON_DECLINE = `
   view.submit("orders", { name: "nobody asked" }).then(again, again);
 </script>`;
 
-/** A page whose button does nothing and which submits from a TIMER, long after it loaded.
+/** A page that submits from a TIMER the click arms, in the very next task.
  *
- *  Nothing is pending when the press happens and nothing was pending at the mount, so every
- *  counting-based defence sees a submission appear "because of" the click. It did not. This is the
- *  page that decides whether the run writes on a guess. */
+ *  Nothing is pending at the mount and nothing is pending when the press happens, so every
+ *  counting-based defence sees a submission appear "because of" the click — and here it even IS
+ *  caused by it, in the loose sense. The contract is not about loose causation: the submission is
+ *  made from a later task, the dispatch is over, and there is no way to tell it apart from a timer
+ *  that was going to fire anyway. This is the page that decides whether the run writes on a guess.
+ *
+ *  ARMED BY THE CLICK, at zero delay, rather than by a fixed wall-clock delay from load (review of
+ *  #1770). A constant had to be long enough to survive mounting, settling, input filling and the
+ *  pre-press observation on a loaded CI runner, and short enough to land inside the press window —
+ *  a range that does not exist reliably. Arming it from the handler makes the ordering a fact
+ *  rather than a bet, and does not weaken the case: a task is a task however it was scheduled. */
 const SUBMITS_ON_A_TIMER = `
 <button type="button" id="go">Order</button>
 <script>
   const view = window.__MC_APP_VIEW;
   view.onState(() => {});
   view.ready();
-  setTimeout(() => { view.submit("orders", { name: "a timer did this" }); }, 800);
+  document.getElementById("go").addEventListener("click", () => {
+    setTimeout(() => { view.submit("orders", { name: "a timer did this" }); }, 0);
+  });
 </script>`;
 
 /** A page that rearranges its own controls when an input is filled.

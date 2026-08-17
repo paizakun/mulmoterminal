@@ -1076,7 +1076,16 @@ const repositoryWriter = (root: string): PreviewWriter => ({
  *
  *  The projection comes from `previewSharedApp`, which is what the pane asks too — so what runs
  *  here is what the author would see there, and neither is a rehearsal of the other. */
-export async function headlessPreview(root: string): Promise<HeadlessRun> {
+/** Run every page this app declares and report what happened.
+ *
+ *  `write` IS OFF BY DEFAULT, and that is the safety boundary rather than the undo. Accepting a
+ *  confirmation puts a real record in the live app — briefly, but a creation is not always
+ *  reversible by deleting the row: rules, functions or an integration may act on it, notifications
+ *  may already have gone out, and `cleanup` can itself fail (the report has a field for exactly
+ *  that). A diagnostic the agent reaches for after every edit must not do any of that unasked, so
+ *  the caller has to say `confirm: true` — the same word `publish` uses for "I accept a real
+ *  consequence". Raised in review of #1770 by two reviewers independently. */
+export async function headlessPreview(root: string, opts: { write?: boolean } = {}): Promise<HeadlessRun> {
   const preview = await previewSharedApp(root);
   if (!preview.ok) return { ok: false, problems: preview.problems };
   if (preview.pages.length === 0) {
@@ -1097,5 +1106,5 @@ export async function headlessPreview(root: string): Promise<HeadlessRun> {
     ...(page.viewer === undefined ? {} : { viewer: page.viewer }),
     submit: Object.keys(preview.submit).length > 0 ? preview.submit : null,
   }));
-  return runPagesHeadless(inputs, repositoryWriter(root));
+  return runPagesHeadless(inputs, opts.write === true ? repositoryWriter(root) : null);
 }
