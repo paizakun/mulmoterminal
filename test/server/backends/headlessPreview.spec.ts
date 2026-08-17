@@ -471,6 +471,28 @@ describe.skipIf(!chromeReady)("a headless run, in a real browser", () => {
     expect(run.pages[0]?.presses[0]?.write).toMatchObject({ ok: false, reason: "taken" });
   }, 120_000);
 
+  it("never writes a confirmation the page raised before the button was pressed", async () => {
+    // `pending` is ONE cell holding whatever is unanswered, so reading it alone accepts the
+    // confirmation a page made at LOAD and attributes the write to a button that did nothing —
+    // a real record, made and removed, for an inert control, and missing from that press's own
+    // account of itself because `submitted` is correctly null. The count is what tells them apart.
+    const wrote: string[] = [];
+    const run = await runPagesHeadless([page("onload", SUBMITS_ON_LOAD)], {
+      write: async (_cid, values) => {
+        wrote.push(values.name ?? "");
+        return { ok: true, token: `t${wrote.length}` };
+      },
+      undo: async () => ({ ok: true }),
+    });
+    if (!run.ok) throw new Error(run.problems.join(" "));
+    // The page DID submit on load — that is the finding, and it is still reported...
+    expect(run.pages[0]?.submittedOnLoad).toBeGreaterThan(0);
+    // ...and its button is inert, so nothing was pressed into existence and NOTHING was written.
+    expect(run.pages[0]?.presses[0]?.submitted).toBeNull();
+    expect(run.pages[0]?.presses[0]?.write).toBeNull();
+    expect(wrote).toEqual([]);
+  }, 120_000);
+
   it("does not abandon a write that outlasts the browser deadline", async () => {
     // THE OTHER HALF of the same fix. Every question put to the browser is bounded by
     // `evaluateMs`; a write made on the far side of that bound would be abandoned by the run while

@@ -756,6 +756,11 @@ async function pressOne(driver: Driver, input: HeadlessPageInput, index: number,
   // as the work of whichever control happened to be under test — and since every press gets a
   // fresh mount, EVERY button on such a page looks correctly wired when none of them is.
   const before = await driver.observe();
+  // ANYTHING ALREADY PENDING IS ANSWERED FIRST, so the control under test is actually exercised.
+  // A page that submits on load leaves a confirmation open across the mount, and the parent refuses
+  // a second one while it is (`busy`) — so without this, every button on such a page is answered by
+  // the bridge rather than by the page, and reported as having reached nothing.
+  await driver.decline();
   const noiseBefore = driver.noise().length;
 
   // THROUGH THE BROWSER, at the control's coordinates, so the event lands where a person's would.
@@ -772,7 +777,14 @@ async function pressOne(driver: Driver, input: HeadlessPageInput, index: number,
   // ACCEPT WHEN THERE IS SOMETHING TO ACCEPT AND SOMETHING LEFT TO SPEND, otherwise answer the way
   // somebody who changed their mind would, so the page's own "cancelled" path runs and nothing is
   // left waiting on a promise that never settles.
-  const pending = after.pending;
+  // THE CONFIRMATION THIS PRESS MADE, and never one that was already open.
+  //
+  // `pending` is one cell holding whatever is currently unanswered, so reading it alone would
+  // accept a confirmation the page raised at LOAD and attribute the write to a button that did
+  // nothing — a real record, made and removed, for an inert control, and absent from that press's
+  // account of itself because `submitted` is correctly null. What tells them apart is the COUNT:
+  // the cell can only be set while nothing is open, so it grows exactly once per new confirmation.
+  const pending = submitted === null ? null : after.pending;
   // Null unless there is BOTH something to accept and a way to accept it, which collapses the two
   // questions into the one narrowing everything below needs.
   const writer = pending === null ? null : budget.writer;

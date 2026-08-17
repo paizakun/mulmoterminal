@@ -99,6 +99,48 @@ describe("narrateHeadlessRun", () => {
     expect(clean).toContain("two people submitting at once");
   });
 
+  it("does not claim a write happened when every submission was refused", () => {
+    // The closing lines are fixed text, which is exactly why a false one there is expensive: it
+    // reads as a guarantee because it is the same every time. A run whose only write was refused
+    // was closing with "Every confirmation above was ACCEPTED and written to the real database as
+    // you" — a sentence about records that do not exist.
+    const said = narrate({
+      presses: [
+        press({
+          submitted: { cid: "orders", fields: [] },
+          write: { cid: "orders", ok: false, error: "denied", reason: "rules", cleanup: "not-written", cleanupError: "" },
+        }),
+      ],
+    });
+    expect(said).not.toContain("written to the real database as you");
+    expect(said).toContain("1 submission was attempted and NOT written");
+  });
+
+  it("says nothing was written when nothing on the pages submitted", () => {
+    // A run with a writer that met no confirmation. It wrote nothing, and the close must say that
+    // rather than describe removals of records it never made.
+    const said = narrate({ presses: [press()] });
+    expect(said).toContain("No confirmation was accepted");
+    expect(said).not.toContain("removed again immediately");
+  });
+
+  it("counts the accepted and the refused apart in the same run", () => {
+    // Both halves are facts about the same run, and a report that told only the first would read
+    // as a clean pass over a page whose other button the rules turned down.
+    const said = narrate({
+      presses: [
+        press({ submitted: { cid: "orders", fields: [] }, write: written() }),
+        press({
+          label: "Cancel",
+          submitted: { cid: "orders", fields: [] },
+          write: { cid: "orders", ok: false, error: "denied", reason: "rules", cleanup: "not-written", cleanupError: "" },
+        }),
+      ],
+    });
+    expect(said).toContain("1 submission was ACCEPTED and written");
+    expect(said).toContain("1 submission was attempted and NOT written");
+  });
+
   it("does not say 'nothing was written' about a run that wrote", () => {
     // The line was fixed text and became false when the run started accepting
     // (`plans/feat-headless-preview-parity.md`). A fixed line that has gone false is worse than no

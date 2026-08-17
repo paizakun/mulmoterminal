@@ -235,7 +235,34 @@ const STILL_UNKNOWN =
  *  (`plans/feat-headless-preview-parity.md`), and a fixed line that has become false is worse than
  *  no line — so the two cases are said apart, and the list of what is still unknown lost exactly
  *  the one entry the writes now cover. */
-function closing(run: { wrote: boolean; writesSkipped: number; screenshotDir: string | null }): string[] {
+/** What the run ACTUALLY did with the confirmations it met, counted from the presses.
+ *
+ *  Counted rather than assumed from `wrote`, which says only that a writer existed. A run whose one
+ *  submission was refused, or which met no submission at all, was closing with "Every confirmation
+ *  above was ACCEPTED and written to the real database as you" — a sentence about records that do
+ *  not exist, in the part of the report a reader trusts most because it is the same every time. */
+function whatWasWritten(pages: readonly HeadlessPageReport[]): string[] {
+  const writes = pages.flatMap((page) => page.presses.flatMap((press) => (press.write === null ? [] : [press.write])));
+  const made = writes.filter((write) => write.ok);
+  const refused = writes.length - made.length;
+  if (writes.length === 0) return ["No confirmation was accepted: nothing on these pages submitted, so nothing was written."];
+  const wrote =
+    made.length === 0
+      ? []
+      : [
+          `${made.length} submission${made.length === 1 ? " was" : "s were"} ACCEPTED and written to the real database as you, then removed again immediately. ` +
+            "Any record this run could not remove is named on the press that made it — there are no others.",
+        ];
+  const denied =
+    refused === 0
+      ? []
+      : [
+          `${refused} submission${refused === 1 ? " was" : "s were"} attempted and NOT written — the press that made each one says who refused it and what that means.`,
+        ];
+  return [...wrote, ...denied];
+}
+
+function closing(run: { wrote: boolean; writesSkipped: number; screenshotDir: string | null; pages: readonly HeadlessPageReport[] }): string[] {
   const skipped =
     run.writesSkipped === 0
       ? []
@@ -254,14 +281,7 @@ function closing(run: { wrote: boolean; writesSkipped: number; screenshotDir: st
         "about two people submitting at once, or about whether the rules are deployed at all.",
     ];
   }
-  return [
-    "",
-    "Every confirmation above was ACCEPTED and written to the real database as you, then removed again immediately. Any record this run could not remove is named " +
-      "on the press that made it — there are no others.",
-    ...skipped,
-    ...pictures,
-    STILL_UNKNOWN,
-  ];
+  return ["", ...whatWasWritten(run.pages), ...skipped, ...pictures, STILL_UNKNOWN];
 }
 
 export function narrateHeadlessRun(run: HeadlessRun): string {
