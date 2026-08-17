@@ -69,11 +69,8 @@ export type TierPlanResult = { ok: true; plans: TierPlan[]; warnings: string[] }
  *  rather than show less — and a page silently handed nothing draws an empty
  *  screen with nothing anywhere to say why.
  *
- *  Checked here rather than only in the publish gate because the set in force
- *  is different at each end: deploy writes the manifest's `participantRead`,
- *  publish promotes what deploy staged. Core's `promotedRoleProblems` says the
- *  same thing about the publish end; this is what says it at the deploy end,
- *  where the manifest IS the truth. */
+ *  Checked here rather than only in the publish gate because this is where the pages are read off
+ *  disk, and the answer is the manifest's own `participantRead` — which is what publish writes. */
 function unreachableProblems(
   authored: AuthoredApp,
   view: { where: string; collections: string[] },
@@ -98,9 +95,8 @@ function unreachableProblems(
  *  read must stop the operation rather than land after the schemas have been
  *  promoted.
  *
- *  `promoted` is the `participantRead` that will actually be in force — at
- *  publish, what deploy staged rather than what `app.json` says now. Getting
- *  this wrong publishes `scope: "all"` for a collection the rules then deny. */
+ *  The `participantRead` in force is the manifest's, because that is what publish writes beside
+ *  these pages. Getting it wrong publishes `scope: "all"` for a collection the rules then deny. */
 export async function planAppViewTiers(root: string, authored: AuthoredApp, stamp: PublishStamp): Promise<TierPlanResult> {
   const tiers: AppViewTier[] = projectAppViews(authored, stamp);
   const problems: string[] = [];
@@ -132,12 +128,10 @@ const wantedDocIds = (plan: TierPlan): Set<string> => {
  *
  *  Listed rather than inferred, for the reason `staleStaged` gives about the
  *  schemas: a page withdrawn from `views[]` leaves a document nothing would
- *  otherwise touch, `/staging/{aid}` goes on offering it, and the next publish
- *  promotes it.
+ *  otherwise touch, the entrance goes on offering it.
  *
- *  Only this stage's documents are considered. `unpublish` deletes `live:*` and
- *  keeps `staged:*` on purpose — closing the doors is not undeploying — so a
- *  publish that tidied the other prefix would quietly undo that. */
+ *  `live:` is the only prefix there is. There was a `staged:` set beside it, written by a deploy
+ *  for the roster to try; both are gone (`plans/feat-shared-app-no-staging.md`). */
 export async function staleViewDocs(handle: SharedAppHandle, aid: string, plan: TierPlan): Promise<{ ok: true; ids: string[] } | SharedAppFailure> {
   const keep = wantedDocIds(plan);
   try {
@@ -217,10 +211,8 @@ export interface PlannedTier {
  *  missing, oversized, or written against the host's bridge has to stop the run
  *  rather than land after the schemas have been promoted.
  *
- *  ONE function for deploy and publish, because the two must not be able to
- *  disagree about what a tier contains — the whole point of `staged:` and
- *  `live:` sharing a shape is that what the roster tried is what the members
- *  get. What differs is the stage, and the `participantRead` in force. */
+ *  ONE function, and it used to be shared by deploy and publish so the two could not disagree
+ *  about what a tier contains. Publish is the only writer now. */
 export async function planTierWrites(
   handle: SharedAppHandle,
   aid: string,

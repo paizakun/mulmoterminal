@@ -100,27 +100,46 @@ function publishSteps({ handle, aid, stamp, face, slug, form, view, tiers, estab
       what: `the schema for '${cid}' (apps/${aid}/collections/${cid})`,
       run: () => handle.docs.set(appSchemasPath(aid), cid, doc),
     })),
+    // The world-readable projection — WRITTEN when the declaration opens the app, DELETED when it
+    // does not.
+    //
+    // The delete is the half that matters. `config/{docId}` is `allow read: if true` forever, so a
+    // publish that takes `public` out of app.json — which is how an author closes an app without
+    // reaching for `unpublish` — would drop the authorization and the URL name while leaving the
+    // previous public page and its form directly fetchable by anybody who kept the path.
+    //
+    // `form` is MulmoTerminal's addition to the projection, and it has to be here rather than
+    // anywhere else: this is the ONLY document a visitor may read, and without the labels and the
+    // choices the public page cannot draw the form at all (the schema is unreadable to somebody
+    // who is neither on the roster nor granted a public read).
     {
-      what: `the public config document (apps/${aid}/config/${PUBLIC_CONFIG_DOC})`,
-      // `form` is MulmoTerminal's addition to core's projection, and it has to be here rather
-      // than anywhere else: this is the ONLY document a visitor may read, and without the labels
-      // and the choices the public page cannot draw the form at all (the schema is unreadable to
-      // somebody who is neither on the roster nor granted a public read).
-      run: () => handle.docs.set(appConfigPath(aid), PUBLIC_CONFIG_DOC, { ...face.config, form }),
+      what:
+        face.public === undefined
+          ? `removing the public config document (apps/${aid}/config/${PUBLIC_CONFIG_DOC})`
+          : `the public config document (apps/${aid}/config/${PUBLIC_CONFIG_DOC})`,
+      run: async () => {
+        if (face.public === undefined) {
+          await handle.docs.delete(appConfigPath(aid), PUBLIC_CONFIG_DOC);
+          return;
+        }
+        await handle.docs.set(appConfigPath(aid), PUBLIC_CONFIG_DOC, { ...face.config, form });
+      },
     },
     // The page itself, carrying the SAME stamp as the config above. The
     // runtime refuses to draw a pair that disagrees, and these are two writes:
     // a run that stops between them leaves a new declaration beside the
     // previous page, which is a view handed fields it has never seen.
     //
-    // The DELETE is not tidiness. `config/{docId}` is `allow read: if true`
-    // forever, so a view withdrawn from the declaration and merely not
-    // rewritten stays fetchable by anybody who asks for it.
+    // The DELETE is not tidiness, and it covers two cases with one condition: a view withdrawn
+    // from `views[]`, and an app that stops being public at all — `declaredView` reads the public
+    // page out of the declaration, so removing the `public` block takes this document with it.
     {
       what:
-        view === null ? `removing the published view (apps/${aid}/config/${PUBLIC_VIEW_DOC})` : `the published view (apps/${aid}/config/${PUBLIC_VIEW_DOC})`,
+        view === null || face.public === undefined
+          ? `removing the published view (apps/${aid}/config/${PUBLIC_VIEW_DOC})`
+          : `the published view (apps/${aid}/config/${PUBLIC_VIEW_DOC})`,
       run: async () => {
-        if (view === null) {
+        if (view === null || face.public === undefined) {
           await handle.docs.delete(appConfigPath(aid), PUBLIC_VIEW_DOC);
           return;
         }

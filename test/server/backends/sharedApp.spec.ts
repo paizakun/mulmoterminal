@@ -345,6 +345,32 @@ describe("shared app publish / unpublish", () => {
     expect(docs.doc(`apps/${AID}/collections`, "bookings")).toBeDefined();
   });
 
+  it("closes an app whose declaration stopped opening it", async () => {
+    // Taking `public` out of app.json and publishing is how an author closes an app without
+    // reaching for `unpublish`, and it has to mean the same thing. The world-readable documents
+    // are the half that is easy to miss: `config/{docId}` is `allow read: if true` forever, so
+    // dropping the authorization while leaving them would keep the previous public page and its
+    // form fetchable by anybody who kept the path.
+    mkdirSync(path.join(root, "views"), { recursive: true });
+    writeFileSync(path.join(root, "views", "form.html"), "<p>book here</p>");
+    const open = { enabled: true, read: ["bookings"], view: { path: "views/form.html", collections: ["bookings"] } };
+    writeApp(root, declaration({ slug: "sakura-hair", public: open }));
+    await publishSharedApp(root, stamp);
+    expect(docs.doc(`apps/${AID}/config`, "public")).toBeDefined();
+    expect(docs.doc(`apps/${AID}/config`, "view")).toBeDefined();
+
+    writeApp(root, declaration({ slug: "sakura-hair" }));
+    const closed = await publishSharedApp(root, stamp);
+    expect(closed.ok === false ? closed.problems : []).toEqual([]);
+    expect(closed.ok === true && closed.publicOpen).toBe(false);
+    expect(docs.app()).not.toHaveProperty("public");
+    expect(docs.doc(`apps/${AID}/config`, "public")).toBeUndefined();
+    expect(docs.doc(`apps/${AID}/config`, "view")).toBeUndefined();
+    expect(docs.doc("appSlugs", "sakura-hair")).toEqual({ aid: AID, published: false });
+    // The roster's half is untouched: the app goes on being the app, for the people on it.
+    expect(docs.doc(`apps/${AID}/collections`, "bookings")).toBeDefined();
+  });
+
   it("says so rather than reporting success when there was nothing open to close", async () => {
     await publishSharedApp(root, stamp);
     const result = await unpublishSharedApp(root);
@@ -461,7 +487,7 @@ describe("shared app publish / unpublish", () => {
 
     const result = await publishSharedApp(root, stamp);
     expect(result.ok).toBe(false);
-    expect(result.ok === false && result.problems.join(" ")).toContain("could not establish");
+    expect(result.ok === false && result.problems.join(" ")).toContain("says nothing about WHY");
     expect(docs.doc("appSlugs", "sakura-hair-2")).toBeUndefined();
   });
 

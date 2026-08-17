@@ -33,9 +33,9 @@ export interface GitStamp {
 }
 
 export interface SharedAppOptions {
-  /** Proceed although live records fail the schema being written. Never a default, and never
-   *  inherited: deploy's confirm says "let me stage this anyway", which is not the same sentence
-   *  as "let the public have it" (design D10). */
+  /** Proceed although live records fail the schema being written. Never a default: it says "let
+   *  everybody the app is for have this anyway", which is a sentence the user has to have said
+   *  (design D10). */
   confirm?: boolean | undefined;
   /** Wall clock, injectable so a test can assert an exact document. */
   now?: (() => number) | undefined;
@@ -73,7 +73,7 @@ export async function gitStamp(root: string): Promise<GitStamp> {
  *
  *  `userSkillsDir: null` is a boundary, not a test convenience. A globally installed skill under
  *  `~/.claude/skills` carrying `storage.type: "firestore"` would otherwise pick up whichever
- *  repository's `aid` it happened to be discovered from — and, because a view is HTML, deploying
+ *  repository's `aid` it happened to be discovered from — and, because a view is HTML, publishing
  *  one is the machine's own skills reaching every member's browser. An app is a REPOSITORY (D1):
  *  its collections are the ones committed beside its `app.json`.
  *
@@ -114,8 +114,8 @@ function ownerFromRoster(app: AuthoredApp): string | undefined {
 
 /** Everything wrong with the declaration itself, publisher included.
  *
- *  Shared by the gate that runs before a deploy and by `check`, which exists to answer "would a
- *  deploy be refused?" — two implementations of that question is two answers, and the one `check`
+ *  Shared by the gate that runs before a publish and by `check`, which exists to answer "would a
+ *  publish be refused?" — two implementations of that question is two answers, and the one `check`
  *  gave was the optimistic one (it missed the `owner` uid mismatch, and said deployable about a
  *  declaration the next deploy refused). */
 export function declarationProblems(app: AuthoredApp, collections: readonly LoadedCollection[], handle: { email: string; uid: string } | null): string[] {

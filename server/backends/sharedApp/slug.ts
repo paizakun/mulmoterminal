@@ -84,7 +84,7 @@ export async function reserveSlug(handle: SharedAppHandle, aid: string, root: st
     partial: true,
     problems: [
       `every candidate for the URL name is taken: ${taken.join(", ")}.`,
-      "The app itself is deployed — this is only the public name. Choose a different `slug` in app.json and deploy again.",
+      "The app itself is written — this is only the public name. Choose a different `slug` in app.json and publish again.",
     ],
   };
 }
@@ -117,14 +117,14 @@ function probeFailed(candidate: string): SharedAppFailure {
     ok: false,
     partial: true,
     problems: [
-      `the URL name '${candidate}' is taken, and this run could not establish whether it is this app's own reservation.`,
-      "Stopping rather than guessing: taking the next numbered name would strand the original, which stays live and — if the app is public — keeps resolving to it.",
+      `the URL name '${candidate}' could not be claimed, and the answer says nothing about WHY: the write failed in a way that is not a refusal, so the name may be free, may be this app's own reservation, or may be somebody else's.`,
+      "Stopping rather than guessing: reading it as somebody else's and taking the next numbered name would strand a reservation this app may already hold — live, unreadable, and held forever by an app that no longer claims it.",
       "Nothing else about the app changed. Publishing again retries just this step.",
     ],
   };
 }
 
-/** Write the reserved name back, so the next deploy does not reserve a second one.
+/** Write the reserved name back, so the next publish does not reserve a second one.
  *
  *  Returns a failure only when the write failed, and that failure is REAL rather than cosmetic:
  *  the reservation is live and unreadable, so a lost write-back means the next run takes
@@ -138,7 +138,7 @@ async function recordSlug(root: string, slug: string): Promise<SharedAppFailure 
     problems: [
       `the URL name '${slug}' was reserved, but writing it back to app.json failed:`,
       ...updated.problems,
-      "Deploying again is the repair: a deploy that finds the name taken now asks whether it is THIS app's before moving on, so the reservation is not stranded.",
+      "Publishing again is the repair: a run that finds the name taken now asks whether it is THIS app's before moving on, so the reservation is not stranded.",
     ],
   };
 }
