@@ -24,8 +24,6 @@ export interface SlugRequest {
   held: string | undefined;
   /** The app document as it will stand, so the reservation can be recorded on it. */
   appDoc: Record<string, unknown>;
-  /** Whether the app is OPEN. The reservation's `published` flag mirrors it. */
-  publicOpen: boolean;
 }
 
 /** Reserve the declared URL name if this app does not already hold it, and record the result on
@@ -38,11 +36,11 @@ export interface SlugRequest {
  *  The extra app-document write is the price of the ordering: the reservation cannot be made
  *  before `apps/{aid}` exists, and what was reserved cannot be recorded before it is reserved. It
  *  happens only on the run that actually takes a name. */
-export async function reserveHeldSlug({ handle, aid, root, wanted, held, appDoc, publicOpen }: SlugRequest): Promise<SlugResult | undefined> {
+export async function reserveHeldSlug({ handle, aid, root, wanted, held, appDoc }: SlugRequest): Promise<SlugResult | undefined> {
   if (wanted === undefined) return undefined;
-  // A reclaim must not change whether the name resolves: an app that is not published holds a name
-  // nobody outside its roster can see.
-  const reservation = await reserveSlug(handle, aid, root, wanted, held === wanted, publicOpen);
+  // Reserved UNPUBLISHED, whatever this app's own state — publish flips it as its own step. See
+  // `reserveSlug`: it is what makes a half-finished rename recoverable.
+  const reservation = await reserveSlug(handle, aid, root, wanted, held === wanted);
   if (!reservation.ok || !reservation.reserved) return reservation;
   // A rename leaves the previous name pointing here, and a published one goes on RESOLVING —
   // while every later unpublish acts on the new name, so the URL the owner believes they took
@@ -121,7 +119,7 @@ export async function holdNewName(
   wanted: string | undefined,
   reservation: Record<string, unknown>,
 ): Promise<{ ok: true; slug: string | undefined } | SharedAppFailure> {
-  const held = await reserveHeldSlug({ handle, aid, root, wanted, held: undefined, appDoc: reservation, publicOpen: false });
+  const held = await reserveHeldSlug({ handle, aid, root, wanted, held: undefined, appDoc: reservation });
   if (held === undefined) return { ok: true, slug: undefined };
   if (!held.ok) {
     return {

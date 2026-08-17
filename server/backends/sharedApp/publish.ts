@@ -340,7 +340,6 @@ export async function publishSharedApp(root: string, opts: SharedAppOptions = {}
     wanted: authored.slug,
     held,
     appDoc: stillOpen(appDoc, existingApp),
-    publicOpen: face.public !== undefined,
   });
   if (reserved !== undefined && !reserved.ok) return { ...reserved, partial: reserved.partial || established };
   const slug = reserved?.slug ?? held;

@@ -465,6 +465,32 @@ describe("shared app publish / unpublish", () => {
     expect(docs.doc("appSlugs", "sakura-hair-2")).toBeUndefined();
   });
 
+  it("never leaves a resolving name the app document does not know about", async () => {
+    // The rename that fails between the reservation and the record. The new name is reserved
+    // UNPUBLISHED whatever the app's state, so this window is a name that opens nothing — not a
+    // world-resolvable name for an app whose document still says the old one, which no later
+    // `unpublish` could close, because unpublish acts on the name the document says.
+    writeApp(root, declaration({ slug: "sakura-hair", public: { enabled: true, read: ["bookings"] } }));
+    await publishSharedApp(root, stamp);
+    expect(docs.doc("appSlugs", "sakura-hair")).toEqual({ aid: AID, published: true });
+
+    writeApp(root, declaration({ slug: "sakura-salon", public: { enabled: true, read: ["bookings"] } }));
+    // The write that records the new name on the app document is the one that fails.
+    docs.failAt = `apps/${AID}`;
+    const failed = await publishSharedApp(root, stamp);
+    expect(failed.ok).toBe(false);
+    expect(docs.doc("appSlugs", "sakura-salon")).toEqual({ aid: AID, published: false });
+    expect(docs.doc("appSlugs", "sakura-hair")).toEqual({ aid: AID, published: false });
+
+    // And publishing again repairs it: the reservation is reclaimed, recorded, and flipped.
+    docs.failAt = null;
+    const repaired = await publishSharedApp(root, stamp);
+    expect(repaired.ok === false ? repaired.problems : []).toEqual([]);
+    expect(repaired.ok === true && repaired.slug).toBe("sakura-salon");
+    expect(docs.doc("appSlugs", "sakura-salon")).toEqual({ aid: AID, published: true });
+    expect(docs.app()?.slug).toBe("sakura-salon");
+  });
+
   it("stops the previous name from resolving when the app is renamed", async () => {
     writeApp(root, declaration({ slug: "sakura-hair", public: { enabled: true, read: ["bookings"] } }));
     await publishSharedApp(root, stamp);
