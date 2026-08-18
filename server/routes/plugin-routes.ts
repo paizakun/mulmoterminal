@@ -5,11 +5,14 @@
 // would otherwise take them. Their failure reporting is narration by contract — see
 // plugin-narration.ts for why a failed tool call must still be a 200.
 import { randomUUID } from "node:crypto";
+import { mkdir, appendFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Express } from "express";
 
 import { CLAUDE_CWD, PORT } from "../config/env.js";
 import { messageOf } from "../errors.js";
 import { isRecord } from "../../common/isRecord.js";
+import { readString } from "../../common/readString.js";
 import { backgroundMarkers, markFailedWorker, markUnplacedSession, ptys } from "../session/registry.js";
 import { runWithHiddenMarker } from "../session/hiddenMarker.js";
 import { registerCompletionHook } from "../session/completion-hooks.js";
@@ -21,7 +24,9 @@ import { codexifySkillSeed } from "../agents/codex-skills.js";
 import { SESSION_HEADER } from "../backends/presentPathRoot.js";
 import { SESSION_ID_RE } from "../config/env.js";
 import { cwdForSession } from "../session/session-cwd.js";
-import { projectScopeForCwd, rootForProjectId } from "../infra/project-root.js";
+import { projectScopeForCwd, rootForProjectId, projectId } from "../infra/project-root.js";
+import { mulmoterminalHome } from "../infra/mulmoterminal-home.js";
+import { slugify } from "../git/worktrees.js";
 import { manageCollectionHandlerFor } from "../infra/collection-tool.js";
 import { manageSharedApp } from "../infra/shared-app-tool.js";
 import { upstreamFailureMessage } from "./plugin-narration.js";
@@ -201,25 +206,68 @@ export function mountPluginRoutes(app: Express, deps: PluginRouteDeps): void {
   mountSharedAppRoute(app);
 }
 
+// One directory per project (keyed by the same opaque, non-reversible id project-root.ts
+// mints for collections), under mulmoterminalHome() rather than env.ts's frozen
+// MULMOTERMINAL_HOME — this is new code, so it gets the override-respecting accessor rather
+// than adding another caller of the constant tracked in issue #3.
+function clearLogDir(cwd: string): string {
+  return path.join(mulmoterminalHome(), "clear-logs", projectId(cwd));
+}
+
+// A stable, sortable, filesystem-safe filename: the timestamp keeps entries ordered without
+// reading their contents, the slug keeps them recognisable in a directory listing.
+function clearLogFilename(title: string): string {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  return `${stamp}-${slugify(title)}.md`;
+}
+
+// Appended, never rewritten: the index is the ONE file a human (or a future agent deciding
+// whether digging further is worth it) reads in full, so it stays cheap to load however many
+// records pile up — a title and a link, not the record itself.
+async function appendClearLogIndex(dir: string, title: string, filename: string): Promise<void> {
+  const line = `- ${new Date().toISOString()} — [${title}](./${filename})\n`;
+  await appendFile(path.join(dir, "index.md"), line, "utf8");
+}
+
 /** Split out of `mountPluginRoutes` for its line budget, same as the two routes below. */
 function mountClearSessionRoute(app: Express): void {
-  // Host tool: clearSession. Types "/clear\r" into the CALLING session's own pty — the
-  // session id rides in the same header manageCollection/manageSharedApp read below, since
-  // that is the MCP broker's only way to say which session is asking. No session id, or one
-  // whose pty is already gone (session ended, or this was reached from outside a live
-  // terminal), narrates rather than throwing — a clear that can't find anything to clear.
-  app.post("/api/plugin/clearSession", (req, res) => {
+  // Host tool: clearSession. Writes `title`/`minutes` to a per-project log, then types
+  // "/clear\r" into the CALLING session's own pty — the session id rides in the same header
+  // manageCollection/manageSharedApp read below, since that is the MCP broker's only way to
+  // say which session is asking. No session id, or one whose pty is already gone (session
+  // ended, or this was reached from outside a live terminal), narrates rather than throwing —
+  // a clear that can't find anything to clear.
+  app.post("/api/plugin/clearSession", async (req, res) => {
     const header = req.get(SESSION_HEADER);
     const sessionId = header && SESSION_ID_RE.test(header) ? header : null;
     const entry = sessionId ? ptys.get(sessionId) : undefined;
     if (!entry) return res.json({ message: "clearSession: no active terminal session found." });
+
+    const body = isRecord(req.body) ? req.body : {};
+    const title = readString(body.title).trim();
+    const minutes = readString(body.minutes).trim();
+    if (!title || !minutes) {
+      return res.json({ message: "clearSession: both `title` and `minutes` are required — nothing was cleared." });
+    }
+
+    const dir = clearLogDir(cwdForSession(sessionId));
+    const filename = clearLogFilename(title);
+    try {
+      await mkdir(dir, { recursive: true });
+      await writeFile(path.join(dir, filename), `# ${title}\n\n${minutes}\n`, "utf8");
+      await appendClearLogIndex(dir, title, filename);
+    } catch (err) {
+      console.error(`[clearSession] failed to write minutes for ${sessionId}: ${messageOf(err)}`);
+      return res.json({ message: `clearSession: could not save minutes (${messageOf(err)}) — nothing was cleared.` });
+    }
+
     try {
       entry.term.write("/clear\r");
     } catch (err) {
       console.error(`[clearSession] write failed for ${sessionId}: ${messageOf(err)}`);
-      return res.json({ message: `clearSession failed: ${messageOf(err)}` });
+      return res.json({ message: `clearSession: minutes saved, but clearing failed: ${messageOf(err)}` });
     }
-    return res.json({ message: "Session cleared." });
+    return res.json({ message: `Session cleared. Minutes saved: ${path.join(dir, filename)}` });
   });
 }
 
