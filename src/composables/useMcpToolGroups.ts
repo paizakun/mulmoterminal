@@ -8,7 +8,7 @@ import { jsonBody } from "../jsonBody";
 import { fetchWithTimeout, SLOW_COMMAND_TIMEOUT_MS } from "../utils/fetchWithTimeout";
 
 // Which GUI tool groups a directory hands its agents, one switch per group in TOOL_GROUPS
-// (render, data, media, external). NOT MulmoTerminal state: each is an MCP server registered in
+// (render, data, media, external, session). NOT MulmoTerminal state: each is an MCP server registered in
 // Claude Code's own local-scope config for that directory, so the switches read and write through
 // /api/gui-mcp-groups and `claude mcp list` stays the one place they can be seen.
 //
