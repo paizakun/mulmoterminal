@@ -14,12 +14,12 @@ import { fetchWithTimeout, SLOW_COMMAND_TIMEOUT_MS } from "../utils/fetchWithTim
 //
 // One record per group rather than a flag per group: the switches differ only in the group they
 // name, so adding one to TOOL_GROUPS should not mean another copy of this block.
-// The four groups spelled out, which reads like a step back from deriving them — and is not.
+// The groups spelled out, which reads like a step back from deriving them — and is not.
 // `Object.fromEntries` types every key as `string`, so it cannot say the result covers ToolGroup;
 // the assertion that used to bridge that gap ACCEPTS a missing key silently. Written out against a
 // `Record<ToolGroup, T>` annotation, a group added to TOOL_GROUPS makes this a compile error
 // instead — the reminder arrives, rather than a switch quietly never appearing.
-const byToolGroup = <T>(value: T): Record<ToolGroup, T> => ({ render: value, data: value, media: value, external: value });
+const byToolGroup = <T>(value: T): Record<ToolGroup, T> => ({ render: value, data: value, media: value, external: value, session: value });
 
 interface Switches {
   // The directory the switches currently describe. Null means there is nothing to show — either

@@ -12,7 +12,11 @@
 //   data     — reads/writes the workspace's structured data (collections, accounting).
 //   media    — generation that is slow, costly, and lands files on disk.
 //   external — reaches a third-party account or API.
-export const TOOL_GROUPS = ["render", "data", "media", "external"] as const;
+//   session  — controls the calling session itself. Confined to that one session: no new
+//              sessions started, nothing spent, nothing outside it touched. NOT for tools that
+//              start or affect a DIFFERENT session (spawnBackgroundChat stays ungrouped for that
+//              reason — it multiplies resource use, which this group's tools do not).
+export const TOOL_GROUPS = ["render", "data", "media", "external", "session"] as const;
 
 export type ToolGroup = (typeof TOOL_GROUPS)[number];
 
@@ -63,6 +67,7 @@ export const TOOL_GROUP_HEADINGS: Record<ToolGroup, string> = {
   data: "Workspace data",
   media: "Canvas",
   external: "External accounts",
+  session: "Session control",
 };
 
 // Which group each GUI tool belongs to.
@@ -73,8 +78,12 @@ export const TOOL_GROUP_HEADINGS: Record<ToolGroup, string> = {
 // than leaking it into one — the map can go stale, but only ever closed.
 //
 // `spawnBackgroundChat` is absent ON PURPOSE, not by omission: it starts another session,
-// which is neither drawing, data, media, nor an external call, and a grid cell has no
-// business doing it silently.
+// which multiplies resource use in a way none of the groups above cover, and a grid cell has
+// no business doing that silently. `clearSession` looked like the same case at first glance —
+// also a session-control tool, also previously ungrouped — but its blast radius is confined to
+// the calling session itself (no new sessions, no spend, nothing else touched), and it already
+// gates on the calling agent getting the user's explicit consent first. That's why it has its
+// own group below instead of staying ungrouped alongside spawnBackgroundChat.
 // A Map, not a plain object — the same reason the plugin dispatch map is one: object index
 // access reads through the prototype chain, so `constructor` / `__proto__` / `toString` would
 // resolve to an Object.prototype member and report a truthy "group". Map.get only ever returns
@@ -104,6 +113,8 @@ const GROUP_BY_TOOL = new Map<string, ToolGroup>([
   ["google", "external"],
   ["readXPost", "external"],
   ["searchX", "external"],
+
+  ["clearSession", "session"],
 ]);
 
 export const groupOfTool = (toolName: string): ToolGroup | null => GROUP_BY_TOOL.get(toolName) ?? null;

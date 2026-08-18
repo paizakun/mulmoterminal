@@ -155,7 +155,7 @@ describe("the tool-group gate", () => {
 
     // The map can go stale when a plugin is added; this is the direction it fails in.
     it("withholds an unclassified tool from every group", () => {
-      for (const group of ["render", "data", "media", "external"] as const) {
+      for (const group of ["render", "data", "media", "external", "session"] as const) {
         expect(names(offeredTools(false, PLUGINS, WORKER_TOOL, group))).not.toContain("spawnBackgroundChat");
       }
     });
