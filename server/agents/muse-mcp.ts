@@ -15,8 +15,8 @@
 //
 //   1. INSTALLATION IS PER MACHINE. `--scope project` writes nothing into the project (measured:
 //      installing from one directory left it untouched and the plugin was listed from another), so
-//      a per-directory registration cannot be expressed by installing and removing. All four group
-//      servers are therefore registered once, and the SESSION decides which of them serve: the
+//      a per-directory registration cannot be expressed by installing and removing. Every group
+//      server is therefore registered once, and the SESSION decides which of them serve: the
 //      spawn records the directory's groups against the session id, the bridge asks for them when
 //      it resolves itself, and one whose group is not among them stands down with an empty toolset
 //      (server/mcp/bridge.mjs). The directory's own switches still govern — they are read from the
@@ -59,7 +59,7 @@ export const MUSE_PLUGIN_ID = "mulmoterminal";
 
 /** The bundle we generate and hand to `muse plugins install`. Under our own config directory
  *  rather than in the user's project: there is one installation per machine, so a copy per
- *  directory would be four copies of the same thing and three of them stale. */
+ *  directory would duplicate the same manifest everywhere and leave every copy but one stale. */
 export const musePluginDir = (): string => path.join(mulmoterminalHome(), "muse-plugin");
 
 /** The flag every `muse plugins` call needs; see the header. */
@@ -74,7 +74,7 @@ export function musePluginManifest(bridge: { command: string; args: string[] }, 
     name: MUSE_PLUGIN_ID,
     displayName: "MulmoTerminal",
     version: "1.0.0",
-    description: "MulmoTerminal's GUI tools — the Canvas, workspace data, media and external accounts.",
+    description: "MulmoTerminal's GUI tools — the Canvas, workspace data, media, external accounts, and session control.",
     compat: { source: "native", manifestDir: ".muse-plugin" },
     capabilities: {
       skills: [],

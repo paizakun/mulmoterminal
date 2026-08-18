@@ -40,7 +40,7 @@ fails to start that cell; the others are unaffected.
 
 This is the real difference between them. "GUI tools" are MulmoTerminal's own MCP tools — the ones
 that draw a chart in the Canvas, read the workspace's data, and so on, grouped as
-`render` / `data` / `media` / `external`.
+`render` / `data` / `media` / `external` / `session`.
 
 There are **three routes**, and which one an agent takes is a property of the agent's CLI, not a
 setting you can change.

@@ -180,7 +180,7 @@ else here does:
   muse's own — so `guiMcpEnv` does not reach it and neither does an `env` block in the manifest.
   The group and the port are argv; the SESSION is asked for, by walking the bridge's process tree
   back to a tmux pane whose name is the session id (`server/session/bridge-session.ts`).
-- the four servers are registered for every session, and the ones a session is not entitled to
+- every group's server is registered for every session, and the ones a session is not entitled to
   serve an EMPTY toolset rather than failing. Erroring would show three broken servers in a cell
   that switched one group on.
 

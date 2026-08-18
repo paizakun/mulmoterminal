@@ -1229,13 +1229,13 @@ MulmoTerminal delivers the GUI MCP by **three different routes**, and they do no
 | | Workspace cell / single view | Project-directory grid cell |
 |---|---|---|
 | How it arrives | generated per spawn into `--mcp-config` (Claude) or `-c mcp_servers.<id>.url=` (Codex) | the user's OWN per-folder config — `.mcp.json`, `claude mcp add -s local` |
-| Server id | **`mt`** | **`mulmoterminal-render`**, `-data`, `-media`, `-external` — one per tool group |
+| Server id | **`mt`** | **`mulmoterminal-render`**, `-data`, `-media`, `-external`, `-session` — one per tool group |
 | Tools carried | all of them, on one URL | only the groups that directory registered |
 | Tool name looks like | `mcp__mt__presentChart` | `mcp__mulmoterminal-render__presentChart` |
 
 The third is **Muse**, which reads neither a flag nor a file in the directory: its MCP servers are
 declared by an installed **plugin**, and `muse plugins install` records one per MACHINE. So
-MulmoTerminal registers a single `mulmoterminal` plugin holding all four group servers, and each
+MulmoTerminal registers a single `mulmoterminal` plugin holding all five group servers, and each
 session is narrowed back to what its own directory switched on — the bridge asks the server which
 session it belongs to (by its process tree) and is told which groups that session may reach. The
 servers are named by group alone, because Muse composes the tool name out of both ids:
@@ -1243,7 +1243,7 @@ servers are named by group alone, because Muse composes the tool name out of bot
 | | Muse cell (anywhere) |
 |---|---|
 | How it arrives | a `mulmoterminal` plugin installed for the machine, re-registered whenever the bridge path or port changes |
-| Server id | **`render`**, `data`, `media`, `external` — inside the `mulmoterminal` plugin |
+| Server id | **`render`**, `data`, `media`, `external`, `session` — inside the `mulmoterminal` plugin |
 | Tools carried | only the groups that directory registered; the rest serve an empty toolset |
 | Tool name looks like | `mcp__plugin_mulmoterminal_render__presentChart` |
 

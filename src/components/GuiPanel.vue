@@ -240,6 +240,8 @@ const TOOL_HINTS = new Map<string, string>([
   ["google", "your linked Google account: Calendar, Tasks, Drive"],
   ["readXPost", "one post on X, fetched by URL or id"],
   ["searchX", "recent posts on X matching a query"],
+
+  ["clearSession", "clears this conversation, after saving a short record of it to disk"],
 ]);
 
 // The tools the SERVER says this session has, asked for rather than reconstructed from the group

@@ -70,7 +70,13 @@ describe("tool groups", () => {
 
   it("names each group's expected MCP server id", () => {
     expect(toolGroupServerId("render")).toBe("mulmoterminal-render");
-    expect(TOOL_GROUPS.map(toolGroupServerId)).toEqual(["mulmoterminal-render", "mulmoterminal-data", "mulmoterminal-media", "mulmoterminal-external"]);
+    expect(TOOL_GROUPS.map(toolGroupServerId)).toEqual([
+      "mulmoterminal-render",
+      "mulmoterminal-data",
+      "mulmoterminal-media",
+      "mulmoterminal-external",
+      "mulmoterminal-session",
+    ]);
   });
 
   // The client prefixes EVERY tool with this id (`mcp__mt__presentChart`,
