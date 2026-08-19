@@ -246,18 +246,10 @@ procedure: open this file, paste this, restart what, how to tell it worked, what
   first** — ordered by release date, not by version number sorted as text, so 1.11.1 sits above
   1.11.0. **`nav_order` DESCENDS as the version rises**: the oldest release page is `10000000`,
   and a new release takes **one less than the current smallest**. So shipping a release is
-  **one new file per language and nothing else moves** — no renumbering.
+  **one new file per language and nothing else moves** — no renumbering. The reference guide
+  keeps the small numbers (1–17); the huge starting point keeps the two ranges from ever meeting.
   Find the number by enumerating, never by memory: `grep -h nav_order docs/guide/en/v*.md | sort -n | head -1`.
-  The old scheme counted UP from 1001 with the newest at the top, which meant every release
-  renumbered all fifty pages in both languages.
-  **The starting point is huge on purpose.** The reference guide keeps the small numbers (1–17),
-  and counting down from anything near them would eventually reach them — which is not
-  hypothetical: the guide had reached `claude-ollama` = 14 and `glossary` = 15 while releases
-  started at 14, and just-the-docs breaks a tie by title, so the sidebar quietly read
-  4.5.0 / glossary / 4.4.0 with nothing erroring. At `10000000` the two ranges cannot meet.
-  When renumbering anyway, **enumerate `docs/guide/*/v*.md` rather than typing the list out**:
-  a hand-typed list has silently dropped a page, and the check written from the same list agreed
-  with it, so nothing caught the duplicate until review did.
+  When renumbering anyway, enumerate `docs/guide/*/v*.md` rather than typing the list out.
 - **State the date in the first line and call it a snapshot.** These pages *will* go stale — that
   is accepted, and the date is what makes a stale one readable rather than misleading. Never
   edit an old one to match new behaviour; write the next version's page instead.
@@ -266,32 +258,21 @@ procedure: open this file, paste this, restart what, how to tell it worked, what
 - A fix-only release still gets a page: "nothing to configure", what was broken, and **how to
   tell you have the fix**. That is what an upgrader actually wants to know.
 - **Link it from the changelog entry** (a `> **Setup guide:**` blockquote line right under the
-  heading — the old convention used a book emoji, dropped per **No emojis** above). Before this
-  existed the changelog had one link into the guide in 717 lines, which is why nobody found the
-  manual.
-- **Point the guide index at the new page.** `docs/guide/{en,ja}/index.md` opens with a
-  `> 🆕` banner naming the newest release. Adding a version page does not update it, and nothing
-  fails when it goes stale — it sat on 2.0.0 through four releases, so the front door advertised
-  a version nobody was running.
+  heading — the old convention used a book emoji, dropped per **No emojis** above).
+- **Point the guide index at the new page.** `docs/guide/{en,ja}/index.md` opens with a banner
+  naming the newest release; adding a version page does not update it automatically.
 - **Verify before committing**: every internal link resolves to a real page *and anchor*, and any
-  config sample is run through its real validator — a bad `keymap` sample stops a reader's server
-  from starting.
-- **Anything the user SEES gets a screenshot.** A colour, a new panel, a pane opening somewhere —
-  prose describing where a stripe appears is worse than the stripe. Existing images live in
-  `docs/guide/images/`, referenced `../images/foo.png`; name a release's own `v<version>-<thing>.png`.
-  Capture with Playwright against a real running server (`deviceScaleFactor: 2`, then downscale —
-  the repo's images run 60KB–840KB). Three traps, each of which cost a retake:
-  - **Screenshots leak the maintainer's directories.** Settings' Directory-settings list, the
-    launcher chips and the cockpit roster all show real paths. Run the capture with `HOME` pointed
-    at a scratch dir holding its own `.mulmoterminal/config.json` (`cwdPresets`, `launchers`), so
-    **the live config is never touched** and only chosen directories appear. Ask which paths may
-    be shown before publishing any.
-  - **A short shell prompt has to be arranged.** The demo `HOME` needs its own `.zshrc`
-    (`PROMPT='%1~ $ '`), and tmux will re-attach an OLD shell that predates it — use a directory
-    that has no session yet, or the prompt in the shot is not the one configured.
-  - **Never guess where a terminal link is.** Hover across the row and take the x range where the
-    computed `cursor` becomes `pointer`; a coordinate estimated from the image is off by enough to
-    click nothing (and a click that silently misses looks exactly like a broken feature).
+  config sample is run through its real validator.
+- **Anything the user SEES gets a screenshot.** Existing images live in `docs/guide/images/`,
+  referenced `../images/foo.png`; name a release's own `v<version>-<thing>.png`. Capture with
+  Playwright against a real running server (`deviceScaleFactor: 2`, then downscale). Watch for:
+  - **Path leakage** — Settings' directory list, launcher chips and the cockpit roster show real
+    paths. Point `HOME` at a scratch dir with its own `.mulmoterminal/config.json` so the live
+    config is never touched, and confirm which paths may be shown before publishing.
+  - **Shell prompt** — the demo `HOME` needs its own short `.zshrc` prompt, in a directory with no
+    existing tmux session (an old session predates the prompt change).
+  - **Terminal link coordinates** — hover to find the x range where `cursor` becomes `pointer`;
+    don't estimate from the image.
 
 ## Filing issues
 - Before filing a **bug / "broken" / "weird behaviour"** issue about MulmoTerminal, run the
