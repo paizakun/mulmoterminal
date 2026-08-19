@@ -74,6 +74,28 @@ const serverIdsIn = (value: unknown): string[] => (isRecord(value) ? Object.keys
 
 const ownProp = (obj: unknown, key: string): unknown => (isRecord(obj) && Object.prototype.hasOwnProperty.call(obj, key) ? obj[key] : undefined);
 
+// `perDir`'s keys are directory paths, and on Windows they never match a plain `ownProp` lookup:
+// `claude mcp add -s local` writes the project key with forward slashes regardless of the cwd's
+// own separator style (confirmed empirically — see issue #8), while `canonicalDir()` resolves to
+// backslash-separated paths. An exact-string lookup against a backslash `cwd` therefore never
+// finds a registration the CLI itself just wrote.
+//
+// Only loosened on win32, not everywhere: backslash is a legal character inside a POSIX path
+// component (an unusual directory name, but a real one), so folding it to `/` on POSIX would risk
+// matching two genuinely different directories. Windows forbids `\` in a path component (it IS the
+// separator there), so the fold is exact — never a coincidence — on the one platform that needs it.
+const normalizeSeparators = (p: string): string => p.replace(/\\/g, "/");
+
+function projectEntry(perDir: unknown, dir: string, platform: NodeJS.Platform = process.platform): unknown {
+  if (!isRecord(perDir)) return undefined;
+  if (platform !== "win32") return ownProp(perDir, dir);
+  const target = normalizeSeparators(dir);
+  for (const key of Object.keys(perDir)) {
+    if (normalizeSeparators(key) === target) return perDir[key];
+  }
+  return undefined;
+}
+
 // The servers a scope holds. Every scope spells them the same way — `{ mcpServers: { <id>: … } }`
 // — a per-directory entry under `projects` included.
 const scopeServerIds = (scope: unknown): string[] => serverIdsIn(ownProp(scope, "mcpServers"));
@@ -118,7 +140,10 @@ const realpathOr = (p: string): string => {
   }
 };
 
-export async function registeredGuiMcpGroups(cwd: string, groups: readonly ToolGroup[]): Promise<ToolGroup[]> {
+// `platform` defaults to the real one and exists for the same reason path-within.ts's
+// `canonicalDir`/`isSamePath` take it: a test pinning POSIX-specific behavior needs to do so on
+// every OS the suite runs on, not just when it happens to execute on Linux/macOS.
+export async function registeredGuiMcpGroups(cwd: string, groups: readonly ToolGroup[], platform: NodeJS.Platform = process.platform): Promise<ToolGroup[]> {
   // Claude Code keys local scope by its OWN process.cwd(), which the OS resolves symlinks in,
   // while the path we are asked about is canonicalized only lexically (see existingWorkspace).
   // Both spellings are looked up so a directory reached through a symlink still matches.
@@ -132,8 +157,8 @@ export async function registeredGuiMcpGroups(cwd: string, groups: readonly ToolG
   const perDir = ownProp(config, "projects");
   const ids = new Set([
     ...scopeServerIds(config),
-    ...scopeServerIds(ownProp(perDir, cwd)),
-    ...(real === cwd ? [] : scopeServerIds(ownProp(perDir, real))),
+    ...scopeServerIds(projectEntry(perDir, cwd, platform)),
+    ...(real === cwd ? [] : scopeServerIds(projectEntry(perDir, real, platform))),
     ...projects.flatMap(scopeServerIds),
   ]);
   return groups.filter((group) => ids.has(toolGroupServerId(group)));

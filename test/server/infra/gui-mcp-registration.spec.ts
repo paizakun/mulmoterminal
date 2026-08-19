@@ -99,6 +99,36 @@ describe("registeredGuiMcpGroups", () => {
     expect((await registeredGuiMcpGroups(deep, TOOL_GROUPS)).sort()).toEqual(["data", "render"]);
   });
 
+  // `claude mcp add -s local` writes the project key with forward slashes regardless of the
+  // cwd's own separator style (confirmed against the real CLI on Windows — see issue #8), while
+  // our own cwd is canonicalized to the platform's native separator. On Windows that made an
+  // exact-string lookup miss a registration the CLI itself had just written.
+  //
+  // Pinned to `platform: "win32"` explicitly (rather than relying on whichever OS runs the
+  // suite) so this exercises the fix on every CI runner, not just Windows daily.
+  it("matches a directory whose project key uses forward slashes, on Windows", async () => {
+    const winCwd = "C:\\Users\\me\\repo";
+    writeClaudeConfig({ projects: { "C:/Users/me/repo": { mcpServers: { "mulmoterminal-render": {} } } } });
+    expect(await registeredGuiMcpGroups(winCwd, TOOL_GROUPS, "win32")).toEqual(["render"]);
+  });
+
+  // The leniency is Windows-only on purpose: `\` is a legal character inside a POSIX directory
+  // name (unusual, but real), so folding it to `/` there would risk matching two genuinely
+  // different directories. A registration for a directory whose actual name happens to contain a
+  // literal backslash must not be handed to a directory whose name only differs by that
+  // character being a `/`.
+  //
+  // Built from string literals, not `path.join`/`root`: on a host whose OWN path module treats
+  // `\` as a separator, joining would silently turn the literal backslash into a real one and
+  // this test would pass for the wrong reason. `projectEntry`'s comparison is plain string
+  // equality with no path-module involvement, so a literal (non-real, non-existent) path exercises
+  // it identically on every host OS.
+  it("does not fold separators on POSIX — a literal backslash in a directory name stays literal", async () => {
+    const dirWithLiteralBackslash = "/repos/foo\\bar"; // one segment named "foo\bar", not "foo/bar"
+    writeClaudeConfig({ projects: { "/repos/foo/bar": { mcpServers: { "mulmoterminal-render": {} } } } });
+    expect(await registeredGuiMcpGroups(dirWithLiteralBackslash, TOOL_GROUPS, "linux")).toEqual([]);
+  });
+
   // Claude Code keys local scope by its own resolved cwd; ours is canonicalized only lexically.
   it("matches a directory reached through a symlink", async () => {
     const link = path.join(root, "link");
