@@ -112,21 +112,39 @@ describe("registeredGuiMcpGroups", () => {
     expect(await registeredGuiMcpGroups(winCwd, TOOL_GROUPS, "win32")).toEqual(["render"]);
   });
 
+  // Separators are not the only axis a CLI-written key can differ on: Windows filesystems are
+  // case-insensitive, so `claude mcp add -s local` (or a user who typed a preset differently) can
+  // end up with a project key whose casing doesn't match ours, reproducing the identical "silently
+  // never registered" symptom through a different mismatch — the exact gap `isSamePath` already
+  // closes for other callers (`#802`). Confirms this path reuses it rather than a narrower
+  // separator-only fold that would leave this case unmatched.
+  it("matches a directory whose project key differs only in case, on Windows", async () => {
+    const winCwd = "C:\\Users\\Me\\Repo";
+    writeClaudeConfig({ projects: { "c:/users/me/repo": { mcpServers: { "mulmoterminal-render": {} } } } });
+    expect(await registeredGuiMcpGroups(winCwd, TOOL_GROUPS, "win32")).toEqual(["render"]);
+  });
+
   // The leniency is Windows-only on purpose: `\` is a legal character inside a POSIX directory
-  // name (unusual, but real), so folding it to `/` there would risk matching two genuinely
-  // different directories. A registration for a directory whose actual name happens to contain a
-  // literal backslash must not be handed to a directory whose name only differs by that
-  // character being a `/`.
+  // name (unusual, but real), and POSIX filesystems are commonly case-sensitive, so folding either
+  // axis there would risk matching two genuinely different directories. A registration for a
+  // directory whose actual name happens to contain a literal backslash, or differs only in case,
+  // must not be handed to a directory whose name merely looks similar.
   //
   // Built from string literals, not `path.join`/`root`: on a host whose OWN path module treats
   // `\` as a separator, joining would silently turn the literal backslash into a real one and
-  // this test would pass for the wrong reason. `projectEntry`'s comparison is plain string
-  // equality with no path-module involvement, so a literal (non-real, non-existent) path exercises
-  // it identically on every host OS.
-  it("does not fold separators on POSIX — a literal backslash in a directory name stays literal", async () => {
+  // this test would pass for the wrong reason. `isSamePath`'s POSIX arm resolves with
+  // `path.posix`, which never treats `\` as a separator, so a literal (non-real, non-existent)
+  // path exercises it identically on every host OS.
+  it("does not fold separators or case on POSIX", async () => {
     const dirWithLiteralBackslash = "/repos/foo\\bar"; // one segment named "foo\bar", not "foo/bar"
-    writeClaudeConfig({ projects: { "/repos/foo/bar": { mcpServers: { "mulmoterminal-render": {} } } } });
+    writeClaudeConfig({
+      projects: {
+        "/repos/foo/bar": { mcpServers: { "mulmoterminal-render": {} } },
+        "/Repos/Foo/Bar": { mcpServers: { "mulmoterminal-data": {} } },
+      },
+    });
     expect(await registeredGuiMcpGroups(dirWithLiteralBackslash, TOOL_GROUPS, "linux")).toEqual([]);
+    expect(await registeredGuiMcpGroups("/repos/foo/bar", TOOL_GROUPS, "linux")).toEqual(["render"]);
   });
 
   // Claude Code keys local scope by its own resolved cwd; ours is canonicalized only lexically.

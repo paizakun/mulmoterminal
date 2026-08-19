@@ -44,7 +44,9 @@ export function canonicalDir(dir: string, platform: NodeJS.Platform = process.pl
 }
 
 /** Do these name the same path? Both sides are resolved first, so a drive-relative or
- *  un-normalized spelling of the same directory still matches. */
+ *  un-normalized spelling of the same directory still matches — separator style included, since
+ *  `.resolve()` folds `/` and `\` to one native form on win32 (`path.win32.resolve` accepts
+ *  both) before the case fold runs. */
 export function isSamePath(a: string, b: string, platform: NodeJS.Platform = process.platform): boolean {
   return normalize(a, platform) === normalize(b, platform);
 }

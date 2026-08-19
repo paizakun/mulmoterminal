@@ -17,6 +17,7 @@ import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { spawnCaptureAsync } from "./spawnCapture.js";
+import { isSamePath } from "./path-within.js";
 import { toolGroupServerId, type ToolGroup } from "../../common/toolGroups.js";
 import { isRecord } from "../../common/isRecord.js";
 
@@ -78,20 +79,19 @@ const ownProp = (obj: unknown, key: string): unknown => (isRecord(obj) && Object
 // `claude mcp add -s local` writes the project key with forward slashes regardless of the cwd's
 // own separator style (confirmed empirically — see issue #8), while `canonicalDir()` resolves to
 // backslash-separated paths. An exact-string lookup against a backslash `cwd` therefore never
-// finds a registration the CLI itself just wrote.
+// finds a registration the CLI itself just wrote — and separators are not the only axis it can
+// differ on: the CLI's own casing of a registered key need not match ours either (the same
+// failure #802 already named for `isSamePath` below), so this reuses that rather than folding
+// only `\`→`/` and leaving a case-only mismatch to reproduce the identical symptom.
 //
-// Only loosened on win32, not everywhere: backslash is a legal character inside a POSIX path
-// component (an unusual directory name, but a real one), so folding it to `/` on POSIX would risk
-// matching two genuinely different directories. Windows forbids `\` in a path component (it IS the
-// separator there), so the fold is exact — never a coincidence — on the one platform that needs it.
-const normalizeSeparators = (p: string): string => p.replace(/\\/g, "/");
-
+// `isSamePath` itself only loosens on win32: `.resolve()` folds the separator on both platforms,
+// but the case fold inside it is win32-only, since `\` is a legal character inside a POSIX path
+// component and folding case on a case-sensitive POSIX filesystem would risk matching two
+// genuinely different directories. See path-within.ts's own comment for the full reasoning.
 function projectEntry(perDir: unknown, dir: string, platform: NodeJS.Platform = process.platform): unknown {
   if (!isRecord(perDir)) return undefined;
-  if (platform !== "win32") return ownProp(perDir, dir);
-  const target = normalizeSeparators(dir);
   for (const key of Object.keys(perDir)) {
-    if (normalizeSeparators(key) === target) return perDir[key];
+    if (isSamePath(key, dir, platform)) return perDir[key];
   }
   return undefined;
 }
