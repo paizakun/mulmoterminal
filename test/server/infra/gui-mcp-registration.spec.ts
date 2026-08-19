@@ -124,6 +124,24 @@ describe("registeredGuiMcpGroups", () => {
     expect(await registeredGuiMcpGroups(winCwd, TOOL_GROUPS, "win32")).toEqual(["render"]);
   });
 
+  // A directory registered once before this fix landed, and again after — under two different
+  // casings — ends up as two independent keys in `.claude.json` that `isSamePath` matches BOTH
+  // of, since it can't tell "the same directory, written twice" from "two directories that
+  // happen to fold together" from the string alone. Returning only the first match found would
+  // silently drop whichever entry's key sorts later, so this pins the merge instead: every group
+  // any matching key registered must be reported, not just one of them (found via manual
+  // before/after verification against a machine with a real split registration — the two-return
+  // version of this fix looked complete until that check surfaced it).
+  it("merges servers from every key that matches, not just the first", async () => {
+    writeClaudeConfig({
+      projects: {
+        "C:/Users/me/repo": { mcpServers: { "mulmoterminal-data": {} } },
+        "c:/users/me/repo": { mcpServers: { "mulmoterminal-render": {} } },
+      },
+    });
+    expect((await registeredGuiMcpGroups("C:\\Users\\me\\repo", TOOL_GROUPS, "win32")).sort()).toEqual(["data", "render"]);
+  });
+
   // The leniency is Windows-only on purpose: `\` is a legal character inside a POSIX directory
   // name (unusual, but real), and POSIX filesystems are commonly case-sensitive, so folding either
   // axis there would risk matching two genuinely different directories. A registration for a

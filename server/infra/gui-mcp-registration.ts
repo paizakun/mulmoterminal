@@ -75,30 +75,37 @@ const serverIdsIn = (value: unknown): string[] => (isRecord(value) ? Object.keys
 
 const ownProp = (obj: unknown, key: string): unknown => (isRecord(obj) && Object.prototype.hasOwnProperty.call(obj, key) ? obj[key] : undefined);
 
-// `perDir`'s keys are directory paths, and on Windows they never match a plain `ownProp` lookup:
-// `claude mcp add -s local` writes the project key with forward slashes regardless of the cwd's
-// own separator style (confirmed empirically — see issue #8), while `canonicalDir()` resolves to
-// backslash-separated paths. An exact-string lookup against a backslash `cwd` therefore never
-// finds a registration the CLI itself just wrote — and separators are not the only axis it can
-// differ on: the CLI's own casing of a registered key need not match ours either (the same
-// failure #802 already named for `isSamePath` below), so this reuses that rather than folding
-// only `\`→`/` and leaving a case-only mismatch to reproduce the identical symptom.
+// The servers a scope holds. Every scope spells them the same way — `{ mcpServers: { <id>: … } }`
+// — a per-directory entry under `projects` included.
+const scopeServerIds = (scope: unknown): string[] => serverIdsIn(ownProp(scope, "mcpServers"));
+
+// `perDir`'s keys are directory paths, and on Windows they never matched a plain `ownProp`
+// lookup: `claude mcp add -s local` writes the project key with forward slashes regardless of the
+// cwd's own separator style (confirmed empirically — see issue #8), while `canonicalDir()`
+// resolves to backslash-separated paths. And separators are not the only axis a written key can
+// differ on: the CLI's own casing need not match ours either (the same failure #802 already named
+// for `isSamePath`, reused here rather than a narrower separator-only fold).
+//
+// Collects EVERY matching key's servers rather than returning the first one found — on a machine
+// that already accumulated split entries from before this fix landed (a directory registered once
+// with one casing and again with another, which `.claude.json` then holds as two independent
+// project keys), `isSamePath` matches BOTH, and stopping at the first would silently discard
+// whichever entry's key happens to sort later in `Object.keys`. This is a genuine merge, not a
+// single winning entry: a directory legitimately fractured across differently-cased keys still has
+// to report every group any of them registered.
 //
 // `isSamePath` itself only loosens on win32: `.resolve()` folds the separator on both platforms,
 // but the case fold inside it is win32-only, since `\` is a legal character inside a POSIX path
 // component and folding case on a case-sensitive POSIX filesystem would risk matching two
 // genuinely different directories. See path-within.ts's own comment for the full reasoning.
-function projectEntry(perDir: unknown, dir: string, platform: NodeJS.Platform = process.platform): unknown {
-  if (!isRecord(perDir)) return undefined;
+function projectServerIds(perDir: unknown, dir: string, platform: NodeJS.Platform = process.platform): string[] {
+  if (!isRecord(perDir)) return [];
+  const ids: string[] = [];
   for (const key of Object.keys(perDir)) {
-    if (isSamePath(key, dir, platform)) return perDir[key];
+    if (isSamePath(key, dir, platform)) ids.push(...scopeServerIds(perDir[key]));
   }
-  return undefined;
+  return ids;
 }
-
-// The servers a scope holds. Every scope spells them the same way — `{ mcpServers: { <id>: … } }`
-// — a per-directory entry under `projects` included.
-const scopeServerIds = (scope: unknown): string[] => serverIdsIn(ownProp(scope, "mcpServers"));
 
 // Every `.mcp.json` a session started in these directories would pick up.
 //
@@ -157,8 +164,8 @@ export async function registeredGuiMcpGroups(cwd: string, groups: readonly ToolG
   const perDir = ownProp(config, "projects");
   const ids = new Set([
     ...scopeServerIds(config),
-    ...scopeServerIds(projectEntry(perDir, cwd, platform)),
-    ...(real === cwd ? [] : scopeServerIds(projectEntry(perDir, real, platform))),
+    ...projectServerIds(perDir, cwd, platform),
+    ...(real === cwd ? [] : projectServerIds(perDir, real, platform)),
     ...projects.flatMap(scopeServerIds),
   ]);
   return groups.filter((group) => ids.has(toolGroupServerId(group)));
