@@ -11,12 +11,12 @@
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { MULMOTERMINAL_HOME } from "../config/env.js";
+import { mulmoterminalHome } from "../infra/mulmoterminal-home.js";
 import { isRecord } from "../../common/isRecord.js";
 import { createKeySerializer } from "../infra/serialize-per-key.js";
 import type { AppendScan, FileStamp } from "./file-cache.js";
 
-const SIDECAR_ROOT = path.join(MULMOTERMINAL_HOME, "transcript-index");
+const sidecarRoot = (): string => path.join(mulmoterminalHome(), "transcript-index");
 // Under this, a fold costs single-digit milliseconds and the in-memory cache already covers it.
 const DEFAULT_MIN_BYTES = 10 * 1024 * 1024;
 // Enough to carry a transcript's first record, which names the session and when it started.
@@ -106,7 +106,7 @@ const isByteCount = (value: unknown): value is number => typeof value === "numbe
 function sidecarPath(kind: string, transcript: string): string {
   const project = path.basename(path.dirname(transcript));
   const session = path.basename(transcript, ".jsonl");
-  return path.join(SIDECAR_ROOT, kind, project, `${session}.json`);
+  return path.join(sidecarRoot(), kind, project, `${session}.json`);
 }
 
 // One read of the first bytes, not a stream: the window is a fixed 256 bytes, and a plain read
