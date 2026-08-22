@@ -9,7 +9,8 @@
 //   has no tests.
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { MULMOTERMINAL_HOME, SESSION_ID_RE } from "../config/env.js";
+import { SESSION_ID_RE } from "../config/env.js";
+import { mulmoterminalHome } from "../infra/mulmoterminal-home.js";
 import { messageOf } from "../errors.js";
 import type { ToolCall, ToolResult } from "./types.js";
 import { reconcileCollectionCard } from "../../common/collectionSeed.js";
@@ -102,7 +103,7 @@ async function fileMtimeMs(file: string): Promise<number> {
 // `isEntry` is required rather than optional: the file is JSON this process wrote, but it can be
 // hand-edited, truncated by a crash, or left behind by an older version — and with no check the
 // list is promoted to T[] on nothing but the type argument, so every read off an entry lies.
-export function createSessionStore<T>(dirName: string, isEntry: (value: unknown) => value is T, root = MULMOTERMINAL_HOME, statMtimeMs = fileMtimeMs) {
+export function createSessionStore<T>(dirName: string, isEntry: (value: unknown) => value is T, root = mulmoterminalHome(), statMtimeMs = fileMtimeMs) {
   const dir = path.join(root, dirName);
   const fileFor = (id: string) => path.join(dir, `${id}.json`);
   const map = new Map<string, T[]>(); // id -> list (the working copy; mutate in place)
@@ -223,7 +224,7 @@ const isToolCall = (value: unknown): value is ToolCall =>
   (value.toolName === undefined || typeof value.toolName === "string") &&
   (value.durationMs === undefined || typeof value.durationMs === "number");
 
-export function createToolStores({ publish, root = MULMOTERMINAL_HOME }: ToolStoreDeps) {
+export function createToolStores({ publish, root = mulmoterminalHome() }: ToolStoreDeps) {
   // GUI toolResults per session, persisted under ~/.mulmoterminal/toolresults so
   // the panel replays the rendered views even after a server reboot. (Chat +
   // message history live in the terminal and Claude's .jsonl; this is the GUI-side

@@ -9,7 +9,8 @@
 // is in memory" have to agree.
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { MULMOTERMINAL_HOME, SESSION_ID_RE } from "../config/env.js";
+import { SESSION_ID_RE } from "../config/env.js";
+import { mulmoterminalHome } from "../infra/mulmoterminal-home.js";
 import type { DirModelChoice } from "./provider-env.js";
 import { asTerminalAgent, type SessionAgent, type TerminalAgent } from "../../common/sessionAgent.js";
 import { messageOf } from "../errors.js";
@@ -169,7 +170,7 @@ function idLogAppender(file: string, label: string): (id: string) => void {
   let persist: Promise<void> = Promise.resolve();
   return (id: string) => {
     persist = persist
-      .then(() => fs.mkdir(MULMOTERMINAL_HOME, { recursive: true }))
+      .then(() => fs.mkdir(mulmoterminalHome(), { recursive: true }))
       .then(() => fs.appendFile(file, sessionIdLogLine(id)))
       .catch((e) => console.error(`[${label}] failed to persist: ${messageOf(e)}`));
   };
@@ -185,9 +186,9 @@ function idLogAppender(file: string, label: string): (id: string) => void {
 // the exclusion applies ONLY to the unscoped (chat) query; the grid's OWN cwd-scoped
 // resume picker (/api/sessions?cwd=…) must keep listing these so they stay resumable.
 export const devTerminalSessions = new Set<string>();
-const DEV_TERMINAL_SESSIONS_FILE = path.join(MULMOTERMINAL_HOME, "dev-terminal-sessions.json");
-export const devTerminalSessionsHydrated = hydrateIdLog(DEV_TERMINAL_SESSIONS_FILE, devTerminalSessions);
-const appendDevTerminalSession = idLogAppender(DEV_TERMINAL_SESSIONS_FILE, "dev-terminal-sessions");
+const devTerminalSessionsFile = (): string => path.join(mulmoterminalHome(), "dev-terminal-sessions.json");
+export const devTerminalSessionsHydrated = hydrateIdLog(devTerminalSessionsFile(), devTerminalSessions);
+const appendDevTerminalSession = idLogAppender(devTerminalSessionsFile(), "dev-terminal-sessions");
 
 // Record a grid/dev-terminal session id, then persist. A no-op once the id is known,
 // so repeated reattaches of the same cell — or a reconnect after a reboot — don't
@@ -209,9 +210,9 @@ export function markDevTerminalSession(id: string, cwd?: string): void {
 // gone after a restart, so a live-only flag would put every finished worker BACK among the
 // chats the moment it completed — the one state the user is guaranteed to see it in.
 const backgroundSessions = new Set<string>();
-const BACKGROUND_SESSIONS_FILE = path.join(MULMOTERMINAL_HOME, "background-sessions.json");
-export const backgroundSessionsHydrated = hydrateIdLog(BACKGROUND_SESSIONS_FILE, backgroundSessions);
-const appendBackgroundSession = idLogAppender(BACKGROUND_SESSIONS_FILE, "background-sessions");
+const backgroundSessionsFile = (): string => path.join(mulmoterminalHome(), "background-sessions.json");
+export const backgroundSessionsHydrated = hydrateIdLog(backgroundSessionsFile(), backgroundSessions);
+const appendBackgroundSession = idLogAppender(backgroundSessionsFile(), "background-sessions");
 
 function markBackgroundSession(id: string): void {
   if (!isValidSessionId(id) || backgroundSessions.has(id)) return;
@@ -246,10 +247,10 @@ export function isBackgroundSession(id: string): boolean {
 // would have said so is exactly what is gone in the case this exists for — the server restarted,
 // or the pty was reaped, before anyone opened a tab (Codex, PR #1189).
 const unplacedSessions = new Map<string, TerminalAgent>();
-const UNPLACED_SESSIONS_FILE = path.join(MULMOTERMINAL_HOME, "unplaced-sessions.json");
+const unplacedSessionsFile = (): string => path.join(mulmoterminalHome(), "unplaced-sessions.json");
 export const unplacedSessionsHydrated = (async () => {
   try {
-    const contents = await fs.readFile(UNPLACED_SESSIONS_FILE, "utf8");
+    const contents = await fs.readFile(unplacedSessionsFile(), "utf8");
     for (const line of contents.split("\n")) {
       const [id, agent] = line.trim().split(/\s+/);
       // A line with no agent is one written before this field existed; claude is what those were.
@@ -262,8 +263,8 @@ export const unplacedSessionsHydrated = (async () => {
 let unplacedPersist: Promise<void> = Promise.resolve();
 function appendUnplacedSession(id: string, agent: TerminalAgent): void {
   unplacedPersist = unplacedPersist
-    .then(() => fs.mkdir(MULMOTERMINAL_HOME, { recursive: true }))
-    .then(() => fs.appendFile(UNPLACED_SESSIONS_FILE, `\n${id} ${agent}`))
+    .then(() => fs.mkdir(mulmoterminalHome(), { recursive: true }))
+    .then(() => fs.appendFile(unplacedSessionsFile(), `\n${id} ${agent}`))
     .catch((e) => console.error(`[unplaced-sessions] failed to persist: ${messageOf(e)}`));
 }
 // Ids whose mark has been cleared this process. The log is append-only (MULMOTERMINAL_HOME is
@@ -295,9 +296,9 @@ export function markSessionPlaced(id: string): void {
   placedSessions.add(id);
   appendPlacedSession(id);
 }
-const PLACED_SESSIONS_FILE = path.join(MULMOTERMINAL_HOME, "placed-sessions.json");
-export const placedSessionsHydrated = hydrateIdLog(PLACED_SESSIONS_FILE, placedSessions);
-const appendPlacedSession = idLogAppender(PLACED_SESSIONS_FILE, "placed-sessions");
+const placedSessionsFile = (): string => path.join(mulmoterminalHome(), "placed-sessions.json");
+export const placedSessionsHydrated = hydrateIdLog(placedSessionsFile(), placedSessions);
+const appendPlacedSession = idLogAppender(placedSessionsFile(), "placed-sessions");
 
 /**
  * A viewer now has this session, so it stops waiting for a home (see the unplaced marker).
@@ -348,10 +349,10 @@ export function isPhoneListableSession(id: string): boolean {
 // server restart would forget it while the claude process keeps running in tmux, already past
 // the ListTools that would teach us again.
 const allToolsSessions = new Set<string>();
-const ALL_TOOLS_SESSIONS_FILE = path.join(MULMOTERMINAL_HOME, "all-tools-sessions.json");
+const allToolsSessionsFile = (): string => path.join(mulmoterminalHome(), "all-tools-sessions.json");
 export const allToolsSessionsHydrated = (async () => {
   try {
-    for (const id of parseAllToolsLog(await fs.readFile(ALL_TOOLS_SESSIONS_FILE, "utf8"), isValidSessionId)) allToolsSessions.add(id);
+    for (const id of parseAllToolsLog(await fs.readFile(allToolsSessionsFile(), "utf8"), isValidSessionId)) allToolsSessions.add(id);
   } catch {
     // absent on first run / unreadable => nothing remembered
   }
@@ -359,8 +360,8 @@ export const allToolsSessionsHydrated = (async () => {
 let allToolsPersist: Promise<void> = Promise.resolve();
 function appendAllToolsEntry(id: string, carries: boolean): void {
   allToolsPersist = allToolsPersist
-    .then(() => fs.mkdir(MULMOTERMINAL_HOME, { recursive: true }))
-    .then(() => fs.appendFile(ALL_TOOLS_SESSIONS_FILE, allToolsLogLine(id, carries)))
+    .then(() => fs.mkdir(mulmoterminalHome(), { recursive: true }))
+    .then(() => fs.appendFile(allToolsSessionsFile(), allToolsLogLine(id, carries)))
     .catch((e) => console.error(`[all-tools-sessions] failed to persist: ${messageOf(e)}`));
 }
 export const whenAllToolsPersisted = (): Promise<void> => allToolsPersist;
@@ -431,9 +432,9 @@ export function claimFullGuiMcp(sessionId: string, attachGuiMcp: boolean, cwd: s
 // Persisted like its siblings: a tmux session outlives a server restart, so the turn that raises
 // the push can happen long after the process that spawned it is gone.
 const userScheduledSessions = new Set<string>();
-const USER_SCHEDULED_SESSIONS_FILE = path.join(MULMOTERMINAL_HOME, "user-scheduled-sessions.json");
-export const userScheduledSessionsHydrated = hydrateIdLog(USER_SCHEDULED_SESSIONS_FILE, userScheduledSessions);
-const appendUserScheduledSession = idLogAppender(USER_SCHEDULED_SESSIONS_FILE, "user-scheduled-sessions");
+const userScheduledSessionsFile = (): string => path.join(mulmoterminalHome(), "user-scheduled-sessions.json");
+export const userScheduledSessionsHydrated = hydrateIdLog(userScheduledSessionsFile(), userScheduledSessions);
+const appendUserScheduledSession = idLogAppender(userScheduledSessionsFile(), "user-scheduled-sessions");
 
 export function markUserScheduledSession(id: string): void {
   if (!isValidSessionId(id) || userScheduledSessions.has(id)) return;
@@ -471,9 +472,9 @@ export async function pushClassification(id: string): Promise<{ background: bool
 // able to find out LATER. A live-only flag would be cleared by the very reap that discovers the
 // failure.
 const failedWorkers = new Set<string>();
-const FAILED_WORKERS_FILE = path.join(MULMOTERMINAL_HOME, "failed-workers.json");
-export const failedWorkersHydrated = hydrateIdLog(FAILED_WORKERS_FILE, failedWorkers);
-const appendFailedWorker = idLogAppender(FAILED_WORKERS_FILE, "failed-workers");
+const failedWorkersFile = (): string => path.join(mulmoterminalHome(), "failed-workers.json");
+export const failedWorkersHydrated = hydrateIdLog(failedWorkersFile(), failedWorkers);
+const appendFailedWorker = idLogAppender(failedWorkersFile(), "failed-workers");
 
 /** Record that a background worker ended without succeeding. Only ever called for a session that
  *  is already a background one — a watched session's failure is visible in its own terminal. */
@@ -507,11 +508,11 @@ export const backgroundMarkers = {
 // Where each grid session was started, for the sessions this process did not spawn (#1021). Live
 // ones answer from `ptys`, which is the truer source — it knows where claude actually runs.
 const sessionCwds = new Map<string, string>();
-const DEV_TERMINAL_CWDS_FILE = path.join(MULMOTERMINAL_HOME, "dev-terminal-cwds.json");
+const devTerminalCwdsFile = (): string => path.join(mulmoterminalHome(), "dev-terminal-cwds.json");
 
 export const devTerminalCwdsHydrated: Promise<void> = (async () => {
   try {
-    hydrateCwdsInto(sessionCwds, await fs.readFile(DEV_TERMINAL_CWDS_FILE, "utf8"), isValidSessionId);
+    hydrateCwdsInto(sessionCwds, await fs.readFile(devTerminalCwdsFile(), "utf8"), isValidSessionId);
   } catch {
     // absent on first run, unreadable => nothing remembered; the list degrades to today's behaviour
   }
@@ -527,8 +528,8 @@ function rememberSessionCwd(id: string, cwd: string): void {
   if (sessionCwds.get(id) === cwd) return; // already the answer; appending would only grow the log
   sessionCwds.set(id, cwd);
   devTerminalCwdPersist = devTerminalCwdPersist
-    .then(() => fs.mkdir(MULMOTERMINAL_HOME, { recursive: true }))
-    .then(() => fs.appendFile(DEV_TERMINAL_CWDS_FILE, devTerminalCwdLine(id, cwd)))
+    .then(() => fs.mkdir(mulmoterminalHome(), { recursive: true }))
+    .then(() => fs.appendFile(devTerminalCwdsFile(), devTerminalCwdLine(id, cwd)))
     .catch((e) => console.error(`[dev-terminal-cwds] failed to persist: ${messageOf(e)}`));
 }
 
@@ -537,7 +538,7 @@ function rememberSessionCwd(id: string, cwd: string): void {
 // leaves the conversation there with nothing pointing at it. Separate files, one shape.
 function conversationLog(fileName: string, label: string) {
   const conversations = new Map<string, AgentConversation>();
-  const file = path.join(MULMOTERMINAL_HOME, fileName);
+  const file = path.join(mulmoterminalHome(), fileName);
   // Sessions this process has already recorded. Hydration reads the file as it was BEFORE our
   // append could reach it, so without this a session spawned during startup is overwritten by an
   // older line — and the cwd it answers with would be the directory that session used to run in.
@@ -587,7 +588,7 @@ function conversationLog(fileName: string, label: string) {
     writtenIds.add(sessionId);
     applyAgentConversation(conversations, record);
     persist = persist
-      .then(() => fs.mkdir(MULMOTERMINAL_HOME, { recursive: true }))
+      .then(() => fs.mkdir(mulmoterminalHome(), { recursive: true }))
       .then(() => fs.appendFile(file, agentConversationLine(record)))
       .catch((e) => console.error(`[${label}] failed to persist: ${messageOf(e)}`));
   }
@@ -641,7 +642,7 @@ export const refreshAgentConversations = async (): Promise<void> => {
 
 // The custom-agent mapping's own log (#1414). Same shape as the memos below and kept for the same
 // reason: it must survive reap and a restart, because the transcript it describes does.
-const CUSTOM_AGENT_SESSIONS_FILE = path.join(MULMOTERMINAL_HOME, "custom-agent-sessions.jsonl");
+const customAgentSessionsFile = (): string => path.join(mulmoterminalHome(), "custom-agent-sessions.jsonl");
 
 // Ids this process has already written. Hydration reads the file as it was BEFORE our append could
 // reach it, so without this a session spawned during startup is overwritten by an older line — and
@@ -650,7 +651,7 @@ const customAgentWrittenIds = new Set<string>();
 
 export const customAgentSessionsHydrated: Promise<void> = (async () => {
   try {
-    await forEachJsonlRecord(CUSTOM_AGENT_SESSIONS_FILE, (parsed) => {
+    await forEachJsonlRecord(customAgentSessionsFile(), (parsed) => {
       const record = customAgentSessionRecord(parsed, isValidSessionId, isCustomAgentId);
       if (record && !customAgentWrittenIds.has(record.sessionId)) applyCustomAgentSession(customAgentSessions, record);
     });
@@ -668,8 +669,8 @@ export function rememberCustomAgentSession(sessionId: string, agentId: string): 
   if (customAgentSessions.get(sessionId) === agentId) return; // already the answer; appending would only grow the log
   applyCustomAgentSession(customAgentSessions, { sessionId, agentId });
   customAgentPersist = customAgentPersist
-    .then(() => fs.mkdir(MULMOTERMINAL_HOME, { recursive: true }))
-    .then(() => fs.appendFile(CUSTOM_AGENT_SESSIONS_FILE, customAgentSessionLine({ sessionId, agentId })))
+    .then(() => fs.mkdir(mulmoterminalHome(), { recursive: true }))
+    .then(() => fs.appendFile(customAgentSessionsFile(), customAgentSessionLine({ sessionId, agentId })))
     .catch((e) => console.error(`[custom-agent-sessions] failed to persist: ${messageOf(e)}`));
 }
 
@@ -678,7 +679,7 @@ export function rememberCustomAgentSession(sessionId: string, agentId: string): 
 // the agent said. Kept across reap and across a restart — a note the user typed is theirs, and
 // resuming the session brings it back.
 export const sessionMemos = new Map<string, string>();
-const SESSION_MEMOS_FILE = path.join(MULMOTERMINAL_HOME, "session-memos.jsonl");
+const sessionMemosFile = (): string => path.join(mulmoterminalHome(), "session-memos.jsonl");
 
 // Ids this process has already written. Hydration reads the file as it was BEFORE our append
 // could reach it, so without this an edit made during startup is overwritten by the old value —
@@ -689,7 +690,7 @@ export const sessionMemosHydrated: Promise<void> = (async () => {
   try {
     // Streamed rather than read whole: nothing caps this file, since it grows for as long as the
     // user keeps editing memos.
-    await forEachJsonlRecord(SESSION_MEMOS_FILE, (parsed) => {
+    await forEachJsonlRecord(sessionMemosFile(), (parsed) => {
       const record = sessionMemoRecord(parsed, isValidSessionId);
       if (record && !memoWrittenIds.has(record.id)) applySessionMemo(sessionMemos, record);
     });
@@ -719,8 +720,8 @@ export async function setSessionMemo(id: string, text: string): Promise<string> 
   memoWrittenIds.add(id);
   applySessionMemo(sessionMemos, { id, text: memo });
   const append = memoPersist
-    .then(() => fs.mkdir(MULMOTERMINAL_HOME, { recursive: true }))
-    .then(() => fs.appendFile(SESSION_MEMOS_FILE, sessionMemoLine(id, memo, Date.now())));
+    .then(() => fs.mkdir(mulmoterminalHome(), { recursive: true }))
+    .then(() => fs.appendFile(sessionMemosFile(), sessionMemoLine(id, memo, Date.now())));
   // The CHAIN must survive this write failing — it is what serializes the appends, and a rejected
   // promise left in it would take down every memo written afterwards.
   memoPersist = append.catch(() => {});
@@ -741,11 +742,11 @@ export async function setSessionMemo(id: string, text: string): Promise<string> 
 // from the user's own per-folder MCP config, which we do not read. Read it through
 // sessionToolGroups() so callers can't mutate the stored set.
 const toolGroupsBySession = new Map<string, Set<ToolGroup>>();
-const SESSION_TOOL_GROUPS_FILE = path.join(MULMOTERMINAL_HOME, "session-tool-groups.json");
+const sessionToolGroupsFile = (): string => path.join(mulmoterminalHome(), "session-tool-groups.json");
 
 async function readPersistedToolGroups(): Promise<SessionToolGroup[]> {
   try {
-    return parseSessionToolGroups(await fs.readFile(SESSION_TOOL_GROUPS_FILE, "utf8"), isValidSessionId);
+    return parseSessionToolGroups(await fs.readFile(sessionToolGroupsFile(), "utf8"), isValidSessionId);
   } catch {
     return [];
   }
@@ -766,8 +767,8 @@ export const sessionToolGroupsHydrated: Promise<void> = (async () => {
 let toolGroupsPersist: Promise<void> = Promise.resolve();
 function appendSessionToolGroup(sessionId: string, group: ToolGroup): void {
   toolGroupsPersist = toolGroupsPersist
-    .then(() => fs.mkdir(MULMOTERMINAL_HOME, { recursive: true }))
-    .then(() => fs.appendFile(SESSION_TOOL_GROUPS_FILE, sessionToolGroupLine(sessionId, group)))
+    .then(() => fs.mkdir(mulmoterminalHome(), { recursive: true }))
+    .then(() => fs.appendFile(sessionToolGroupsFile(), sessionToolGroupLine(sessionId, group)))
     .catch((e) => console.error(`[session-tool-groups] failed to persist: ${messageOf(e)}`));
 }
 
@@ -815,8 +816,8 @@ export function resetSessionToolGroups(sessionId: string): void {
   resetToolGroupSessions.add(sessionId);
   toolGroupsBySession.set(sessionId, new Set());
   toolGroupsPersist = toolGroupsPersist
-    .then(() => fs.mkdir(MULMOTERMINAL_HOME, { recursive: true }))
-    .then(() => fs.appendFile(SESSION_TOOL_GROUPS_FILE, sessionToolGroupLine(sessionId, TOOL_GROUP_RESET)))
+    .then(() => fs.mkdir(mulmoterminalHome(), { recursive: true }))
+    .then(() => fs.appendFile(sessionToolGroupsFile(), sessionToolGroupLine(sessionId, TOOL_GROUP_RESET)))
     .catch((e) => console.error(`[session-tool-groups] failed to persist reset: ${messageOf(e)}`));
 }
 
@@ -827,10 +828,10 @@ export function resetSessionToolGroups(sessionId: string): void {
 // (the only stale case is a turn that finished DURING the restart window — corrected on the
 // user's next turn). Read paths await hydration (see /api/activity, /api/session) so a
 // reconnect re-fetch can't race it back to idle. Mirrors the dev-terminal-sessions pattern.
-const ACTIVITY_STATE_FILE = path.join(MULMOTERMINAL_HOME, "activity-state.json");
+const activityStateFile = (): string => path.join(mulmoterminalHome(), "activity-state.json");
 export const activityStateHydrated: Promise<void> = (async () => {
   try {
-    const parsed: unknown = JSON.parse(await fs.readFile(ACTIVITY_STATE_FILE, "utf8"));
+    const parsed: unknown = JSON.parse(await fs.readFile(activityStateFile(), "utf8"));
     for (const { id, working, waiting, event } of parseActivityState(parsed, (x) => SESSION_ID_RE.test(x))) {
       // Don't clobber a live update that already landed while hydration was in flight.
       if (!activity.has(id)) activity.set(id, { working, waiting, event, at: Date.now() });
@@ -852,7 +853,7 @@ export function claimActivityOwnership(id: string): void {
 
 async function readPersistedActivity(): Promise<Record<string, PersistedActivity>> {
   try {
-    const parsed = parseActivityState(JSON.parse(await fs.readFile(ACTIVITY_STATE_FILE, "utf8")), (x) => SESSION_ID_RE.test(x));
+    const parsed = parseActivityState(JSON.parse(await fs.readFile(activityStateFile(), "utf8")), (x) => SESSION_ID_RE.test(x));
     return Object.fromEntries(parsed.map(({ id, working, waiting, event }) => [id, { working, waiting, event }]));
   } catch {
     return {}; // no file yet / unreadable => nothing to preserve
@@ -868,7 +869,7 @@ let activityPersist: Promise<void> = Promise.resolve();
 export function persistActivityState(isHidden: (id: string) => boolean): void {
   activityPersist = activityPersist
     .then(() => activityStateHydrated)
-    .then(() => fs.mkdir(MULMOTERMINAL_HOME, { recursive: true }))
+    .then(() => fs.mkdir(mulmoterminalHome(), { recursive: true }))
     .then(async () => {
       const onDisk = await readPersistedActivity();
       const owned = buildActivitySnapshot(
@@ -876,7 +877,7 @@ export function persistActivityState(isHidden: (id: string) => boolean): void {
         isHidden,
       );
       const next = mergeOwnedActivity(onDisk, owned, (id) => ownedActivityIds.has(id));
-      await fs.writeFile(ACTIVITY_STATE_FILE, JSON.stringify(next));
+      await fs.writeFile(activityStateFile(), JSON.stringify(next));
     })
     .catch((e) => console.error(`[activity-state] failed to persist: ${messageOf(e)}`));
 }

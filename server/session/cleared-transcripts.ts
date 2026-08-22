@@ -20,12 +20,13 @@
 //     leave a mark that silences a resumed session's summary for good.
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { MULMOTERMINAL_HOME, SESSION_ID_RE } from "../config/env.js";
+import { SESSION_ID_RE } from "../config/env.js";
+import { mulmoterminalHome } from "../infra/mulmoterminal-home.js";
 import { isRecord } from "../../common/isRecord.js";
 import { messageOf } from "../errors.js";
 import { projectSessionsDir } from "./project-dir.js";
 
-const CLEARED_DIR = path.join(MULMOTERMINAL_HOME, "cleared-transcripts");
+const clearedDir = (): string => path.join(mulmoterminalHome(), "cleared-transcripts");
 
 // Read synchronously by the hot paths (a publish runs on every hook), so the durable copy is
 // hydrated into it at import — before the server listens, which is what closes the window.
@@ -105,7 +106,7 @@ async function transcriptSize(cwd: string, id: string): Promise<number> {
  *
  *  `claudeId` is what claude called ITSELF in the hook that announced this clear — the id the new
  *  conversation's prompts are filed under in its history. Undefined where the hook named none. */
-export async function markTranscriptCleared(id: string, cwd: string | undefined, claudeId?: string, dir: string = CLEARED_DIR): Promise<void> {
+export async function markTranscriptCleared(id: string, cwd: string | undefined, claudeId?: string, dir: string = clearedDir()): Promise<void> {
   clearedTranscripts.add(id);
   // Before the early return: a session with no cwd is still cleared AT a moment, and the prompts
   // pane draws its line from that whether or not there is a file to freeze.
@@ -128,7 +129,7 @@ const removeMarker = (dir: string, id: string): Promise<void> =>
 
 /** Drop the mark, on disk too. The removal is fire-and-forget because the caller (reap) is
  *  synchronous; a file that outlives the process is caught by hydration either way. */
-export function forgetClearedTranscript(id: string, dir: string = CLEARED_DIR): void {
+export function forgetClearedTranscript(id: string, dir: string = clearedDir()): void {
   clearedTranscripts.delete(id);
   clearedState.delete(id);
   void removeMarker(dir, id);
@@ -162,7 +163,7 @@ async function restoreMark(dir: string, file: string): Promise<void> {
  *  so hydration has to be finished before the first hook can arrive; and because this discards
  *  marks it finds stale, an import-time run would reach into the real home from every spec that
  *  loads this module. */
-export async function hydrateClearedTranscripts(dir: string = CLEARED_DIR): Promise<void> {
+export async function hydrateClearedTranscripts(dir: string = clearedDir()): Promise<void> {
   const files = await fs.readdir(dir).catch((): string[] => []);
   await Promise.all(files.map((file) => restoreMark(dir, file)));
 }

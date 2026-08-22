@@ -30,7 +30,8 @@ import {
 } from "./infra/tmux.js";
 import { bindSecurityWarning, browserOriginHostnames, createIsAllowedOrigin } from "./infra/allowed-origin.js";
 import { serverErrorExit } from "./infra/server-exit.js";
-import { PORT, BIND_HOST, CLAUDE_CWD, MULMOTERMINAL_HOME, SESSION_ID_RE } from "./config/env.js";
+import { PORT, BIND_HOST, CLAUDE_CWD, SESSION_ID_RE } from "./config/env.js";
+import { mulmoterminalHome } from "./infra/mulmoterminal-home.js";
 import { isLoopbackBinding } from "./infra/loopback.js";
 import { messageOf } from "./errors.js";
 import { hookSettingsJson } from "./session/hook-settings.js";
@@ -427,7 +428,7 @@ const TRANSCRIPT_FLUSH_MS = 5_000;
 // is, and without it the next report of "usage says n/a" starts from nothing (#1293).
 const reportProbeScreen = (screen: string): void => {
   if (!screen) return;
-  const file = writeProbeScreen(MULMOTERMINAL_HOME, screen);
+  const file = writeProbeScreen(mulmoterminalHome(), screen);
   if (file) console.warn(`[rate-limit] the usage probe reported nothing; what its terminal showed is in ${file}`);
 };
 
@@ -470,7 +471,7 @@ const startClaudeRateLimitProbe = (): void => {
 // content test cannot tell those files from a person who typed the probe's exact words, so the
 // window in which that matters is closed rather than reopened on every boot (Codex review on
 // #1030). It also means a 500MB transcript directory is read once, not once per `yarn dev` save.
-void sweepLegacyProbeTranscriptsOnce(CLAUDE_CWD, MULMOTERMINAL_HOME).catch(() => {});
+void sweepLegacyProbeTranscriptsOnce(CLAUDE_CWD, mulmoterminalHome()).catch(() => {});
 // The removed Docker sandbox left two things behind when a server was killed or upgraded
 // mid-session: a per-session export of the Keychain credential on disk, and a container still
 // running with the workspace and ~/.claude mounted. Both deleters went with the feature.
@@ -478,7 +479,7 @@ void sweepLegacyProbeTranscriptsOnce(CLAUDE_CWD, MULMOTERMINAL_HOME).catch(() =>
 // The directory is the EVIDENCE that this machine ever ran the sandbox, so the container sweep is
 // gated on it: nearly every install never turned it on (opt-in, macOS-only) and never invokes
 // docker here at all (Codex, PR #1195).
-if (removeLegacySandboxCredentials(MULMOTERMINAL_HOME)) void removeLegacySandboxContainers(MULMOTERMINAL_HOME).catch(() => {});
+if (removeLegacySandboxCredentials(mulmoterminalHome())) void removeLegacySandboxContainers(mulmoterminalHome()).catch(() => {});
 
 // Codex costs nothing to read, so it is current before the first browser arrives.
 refreshCodexRateLimits();
@@ -836,7 +837,7 @@ const sessionInUse = (id: string): boolean => {
 };
 
 const scheduledSessions = createScheduledSessionRegistry({
-  dir: scheduledSessionsDir(CLAUDE_CWD, MULMOTERMINAL_HOME),
+  dir: scheduledSessionsDir(CLAUDE_CWD, mulmoterminalHome()),
   isValidId: (id) => SESSION_ID_RE.test(id),
   isInUse: sessionInUse,
   reapSession: reap,

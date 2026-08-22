@@ -9,13 +9,13 @@
 // backend on every source change. A number from ten minutes ago is worth more than either.
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { MULMOTERMINAL_HOME } from "../config/env.js";
+import { mulmoterminalHome } from "../infra/mulmoterminal-home.js";
 import type { RateLimitSnapshot } from "./rate-limit-store.js";
 import { parseRateLimits } from "../../common/rateLimits.js";
 import { isRecord } from "../../common/isRecord.js";
 import { finiteNumber } from "../../common/finiteNumber.js";
 
-export const rateLimitCacheFile = (): string => path.join(MULMOTERMINAL_HOME, "rate-limits.json");
+export const rateLimitCacheFile = (): string => path.join(mulmoterminalHome(), "rate-limits.json");
 
 /**
  * What was cached, as the store's own shape. Every field is re-validated rather than trusted: this
